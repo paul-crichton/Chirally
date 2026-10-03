@@ -24,7 +24,7 @@ export class Viewer3DPanel {
   private info: HTMLElement;
   private mol3d: Mol | null = null;
   private worker: Worker | null = null;
-  private pending = new Map<number, (r: WorkerReply) => void>();
+  private pending = new Map<number, { resolve: (r: WorkerReply) => void; fallback: () => WorkerReply; timer: ReturnType<typeof setTimeout> }>();
   private reqId = 0;
   private busy = false;
   private source = '';
@@ -88,14 +88,24 @@ export class Viewer3DPanel {
     try {
       this.worker = new Worker(new URL('../../workers/chem3d.worker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = (e: MessageEvent<WorkerReply>) => {
-        const cb = this.pending.get(e.data.id);
-        if (cb) {
+        const p = this.pending.get(e.data.id);
+        if (p) {
           this.pending.delete(e.data.id);
-          cb(e.data);
+          clearTimeout(p.timer);
+          p.resolve(e.data);
         }
       };
-      this.worker.onerror = () => {
+      this.worker.onerror = (e) => {
+        // e.g. the worker chunk 404s in a tab opened before a redeploy, or offline without it cached:
+        // answer the waiting requests on the main thread now instead of after the 60 s timeout
+        e.preventDefault();
+        this.worker?.terminate();
         this.worker = null;
+        for (const p of this.pending.values()) {
+          clearTimeout(p.timer);
+          p.resolve(p.fallback());
+        }
+        this.pending.clear();
       };
     } catch {
       this.worker = null;
@@ -113,10 +123,7 @@ export class Viewer3DPanel {
         this.pending.delete(id);
         resolve(fallback());
       }, 60000);
-      this.pending.set(id, (r) => {
-        clearTimeout(timer);
-        resolve(r);
-      });
+      this.pending.set(id, { resolve, fallback, timer });
       w.postMessage({ ...req, id });
     });
   }
