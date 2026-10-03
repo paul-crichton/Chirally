@@ -312,6 +312,8 @@ export class Namer {
     if (g.el[x] !== 'N' || g.inRing[x]) return false;
     for (const j of g.nb[x]) {
       if (g.order(x, j) !== 1) return false;
+      // N–P / N–Si: the phosphorus/silicon part is an N-substituent (PubChem style)
+      if ((g.el[j] === 'P' || g.el[j] === 'Si') && !g.inRing[j]) continue;
       if (g.el[j] !== 'C' && !g.inRing[j]) return false;
       if (this.gcType[j]) return false;
       if (g.el[j] === 'C' && !g.inRing[j] && (g.terminalDouble(j, 'S') >= 0 || g.nb[j].some((k) => g.el[k] === 'N' && g.order(j, k) === 2))) return false;

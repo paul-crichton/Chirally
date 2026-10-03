@@ -209,6 +209,55 @@ export function assignWedgesFromSpecs(mol: Mol, rings?: RingInfo): void {
   }
 }
 
+/**
+ * ChemDraw-style depiction of ring-fusion stereocentres: centres whose three bonds are all ring bonds
+ * (implicit H) get an explicit H atom so the wedge can sit on a terminal bond. Updates mol.tetra and
+ * re-assigns wedges. Returns the number of hydrogens added.
+ */
+export function explicitFusionHydrogens(mol: Mol): number {
+  if (!mol.tetra.length) return 0;
+  const info = perceiveRings(mol);
+  let added = 0;
+  for (const t of mol.tetra) {
+    const i = t.center;
+    if (!t.nbrs.includes(-1) || mol.degree(i) !== 3) continue;
+    if (!mol.adj[i].every((bi) => info.bondInRing[bi])) continue;
+    const h = addFusionHydrogen(mol, i);
+    if (h < 0) continue;
+    t.nbrs = t.nbrs.map((n) => (n === -1 ? h : n)) as TetraSpec['nbrs'];
+    added++;
+  }
+  if (added) assignWedgesFromSpecs(mol);
+  return added;
+}
+
+/** Adds an explicit H to atom i in the least crowded direction opposite one of its bonds. Returns its index. */
+function addFusionHydrogen(mol: Mol, i: number): number {
+  const c = mol.atoms[i];
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  for (const j of mol.neighbors(i)) {
+    const dx = c.x - mol.atoms[j].x, dy = c.y - mol.atoms[j].y;
+    const l = Math.hypot(dx, dy) || 1;
+    const p = { x: c.x + (dx / l) * 0.95, y: c.y + (dy / l) * 0.95 };
+    let minD = Infinity;
+    for (let k = 0; k < mol.atoms.length; k++) {
+      if (k === i) continue;
+      minD = Math.min(minD, Math.hypot(mol.atoms[k].x - p.x, mol.atoms[k].y - p.y));
+    }
+    if (minD > bestScore) {
+      bestScore = minD;
+      best = p;
+    }
+  }
+  if (!best || bestScore < 0.45) return -1;
+  const h = mol.addAtom({ el: 'H', x: best.x, y: best.y });
+  mol.addBond(i, h, 1);
+  const a = mol.atoms[i];
+  if (a.hCount !== undefined) a.hCount = Math.max(0, a.hCount - 1);
+  return h;
+}
+
 function sameOrderCcw(t: TetraSpec, order: readonly number[]): boolean | null {
   // both contain the same set of neighbours (with -1 for implicit H)
   const a = [...t.nbrs].sort((p, q) => p - q).join(',');

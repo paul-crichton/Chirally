@@ -3,7 +3,7 @@ import { Mol } from '../chem/mol';
 import { parseSmiles, writeSmiles, suppressHydrogens, parseReactionSmiles } from '../chem/smiles';
 import { layoutMol } from '../chem/layout2d';
 import { clean2D } from '../chem/clean2d';
-import { perceiveStereo2D, assignWedgesFromSpecs } from '../chem/stereo2d';
+import { perceiveStereo2D, assignWedgesFromSpecs, explicitFusionHydrogens } from '../chem/stereo2d';
 import { expandAbbreviations, abbreviationMol } from '../chem/abbreviations';
 import { computeFormula, FormulaInfo } from '../chem/formula';
 import { computeProperties, MolProperties } from '../chem/properties';
@@ -18,6 +18,7 @@ import { buildScene } from '../render/scene';
 export function smilesToMol(s: string): Mol {
   const m = parseSmiles(s);
   layoutMol(m);
+  explicitFusionHydrogens(m);
   return m;
 }
 
@@ -240,7 +241,10 @@ export function stripHydrogens(m: Mol): Mol {
   if (!m.atoms.some((a) => a.el === 'H')) return m;
   if (!m.tetra.length && !m.dbStereo.length) perceiveStereo2D(m);
   const s = suppressHydrogens(m);
-  if (s.tetra.length) assignWedgesFromSpecs(s);
+  if (s.tetra.length) {
+    assignWedgesFromSpecs(s);
+    explicitFusionHydrogens(s);
+  }
   s.name = m.name;
   s.props = m.props;
   return s;
