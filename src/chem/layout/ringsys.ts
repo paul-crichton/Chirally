@@ -49,10 +49,19 @@ export function layoutRingSystem(mol: Mol, info: RingInfo, sysIdx: number): SysL
   // Ring-by-ring fusion, trying a few start rings (best heuristic first).
   const starts = [...rings].sort((p, q) => startRingKey(ctx, q) - startRingKey(ctx, p) || p - q);
   const cands: { pos: Map<number, Pt>; bridged: boolean; score: number }[] = [];
+  // macrocycles whose E/Z specs need trans ring bonds start from their turn-sequence polygon
+  for (const r of rings) {
+    const ring = info.rings[r];
+    if (ring.length < 8) continue;
+    const turns = macrocycleTurns(mol, ring);
+    if (!turns) continue;
+    const f = fusedPlacement(ctx, r, turnPolygon(ctx, ring, turns));
+    cands.push({ ...f, bridged: true, score: scoreLayout(ctx, f.pos) });
+  }
   for (const s of starts.slice(0, 6)) {
     const f = fusedPlacement(ctx, s);
     const score = scoreLayout(ctx, f.pos);
-    if (score < 0.05) return { pos: f.pos, score, method: 'fused' };
+    if (score < 0.05 && !cands.length) return { pos: f.pos, score, method: 'fused' };
     cands.push({ ...f, score });
   }
   cands.sort((p, q) => p.score - q.score);
@@ -240,12 +249,12 @@ interface FusedResult {
   bridged: boolean;
 }
 
-function fusedPlacement(ctx: SysCtx, start: number): FusedResult {
+function fusedPlacement(ctx: SysCtx, start: number, startPos?: Map<number, Pt>): FusedResult {
   const { info } = ctx;
   const pos = new Map<number, Pt>();
   const startRing = info.rings[start];
   const n0 = startRing.length;
-  regularPolygon(startRing, { x: 0, y: 0 }, Math.PI / 2 + Math.PI / n0, 1).forEach((p, a) => pos.set(a, p));
+  (startPos ?? regularPolygon(startRing, { x: 0, y: 0 }, Math.PI / 2 + Math.PI / n0, 1)).forEach((p, a) => pos.set(a, p));
   const done = new Set<number>([start]);
   let bridged = false;
   while (done.size < ctx.rings.length) {
@@ -650,6 +659,19 @@ function relaxSystem(ctx: SysCtx, start: Map<number, Pt>, wScale = 1): Map<numbe
   for (const [a, p] of start) { xy[2 * a] = p.x; xy[2 * a + 1] = p.y; }
   unfoldRings(ctx, xy);
   const cons = ringSystemConstraints(mol, info, ctx.rings, ctx.bonds, wScale);
+  // E/Z of large-ring double bonds: 1-4 distances of the in-system substituents
+  for (const d of systemDbSpecs(ctx)) {
+    const b = mol.bonds[d.bond];
+    const na = mol.neighbors(b.a).filter((j) => j !== b.b && ctx.atomSet.has(j));
+    const nb = mol.neighbors(b.b).filter((j) => j !== b.a && ctx.atomSet.has(j));
+    if (na.length !== 1 || nb.length !== 1) continue;
+    let ra = d.a, rb = d.b;
+    if (mol.bondBetween(b.a, ra) < 0) { ra = d.b; rb = d.a; }
+    let cis = d.cis;
+    if (ra !== na[0]) cis = !cis;
+    if (rb !== nb[0]) cis = !cis;
+    cons.push({ i: na[0], j: nb[0], d: cis ? 2.0 : Math.sqrt(7), w: 0.4 * wScale });
+  }
   const excl = new Set<number>();
   for (const c of cons) excl.add(pairKey(c.i, c.j, nAll));
   relax(xy, nAll, cons, { iterations: 160, atoms: ctx.atoms, repelDist: 0.95, repelWeight: 0.5, exclude: excl });
@@ -658,10 +680,43 @@ function relaxSystem(ctx: SysCtx, start: Map<number, Pt>, wScale = 1): Map<numbe
   return out;
 }
 
-/** Layout penalty: bond lengths, small-ring regularity/folding, non-bonded clashes, crossings. */
+/** E/Z specs on bonds of this system that lie in rings ≥ 8 (smaller rings are always cis). */
+function systemDbSpecs(ctx: SysCtx): DbSpec[] {
+  const { mol, info } = ctx;
+  return mol.dbStereo.filter((d) => {
+    const b = mol.bonds[d.bond];
+    if (!b || !ctx.atomSet.has(b.a) || !ctx.atomSet.has(b.b) || !info.bondInRing[d.bond]) return false;
+    const rs = info.bondRings[d.bond].map((r) => info.rings[r].length);
+    return rs.length > 0 && Math.min(...rs) >= 8;
+  });
+}
+
+/** Spec satisfied by positions (refs outside the system are inferred from the trigonal geometry). */
+function dbSpecOK(mol: Mol, pos: Map<number, Pt>, d: DbSpec): boolean {
+  const b = mol.bonds[d.bond];
+  const A = pos.get(b.a)!, B = pos.get(b.b)!;
+  const sideOf = (end: number, other: number, ref: number): number => {
+    let r = ref, flip = 1;
+    if (!pos.has(r)) {
+      // use the in-system neighbour instead: it lies on the other side of the double bond axis
+      const alt = mol.neighbors(end).find((j) => j !== other && j !== ref && pos.has(j));
+      if (alt === undefined) return 0;
+      r = alt; flip = -1;
+    }
+    return flip * Math.sign(cross3(A, B, pos.get(r)!));
+  };
+  let ra = d.a, rb = d.b;
+  if (mol.bondBetween(b.a, ra) < 0) { ra = d.b; rb = d.a; }
+  const sa = sideOf(b.a, b.b, ra), sb = sideOf(b.b, b.a, rb);
+  if (!sa || !sb) return true;
+  return sa * sb > 0 === d.cis;
+}
+
+/** Layout penalty: bond lengths, small-ring regularity/folding, non-bonded clashes, crossings, E/Z. */
 function scoreLayout(ctx: SysCtx, pos: Map<number, Pt>): number {
   const { mol, info } = ctx;
   let s = 0;
+  for (const d of systemDbSpecs(ctx)) if (!dbSpecOK(mol, pos, d)) s += 8;
   for (const bi of ctx.bonds) {
     const b = mol.bonds[bi];
     const d = dist(pos.get(b.a)!, pos.get(b.b)!);
