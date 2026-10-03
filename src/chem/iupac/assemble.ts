@@ -104,7 +104,10 @@ export function formatPrefixes(items: PrefixItem[], locantless: boolean): string
     // simple prefixes are enclosed after a multiplier if they contain locants/marks or themselves begin
     // with a multiplier-like syllable ("di(propan-2-yl)", "di(hexadecanoyloxy)", P-16.5.1)
     else if (n > 1) body = multiplier(n) + (/[\d([{]/.test(t) || sub.enclose || MULT_START.test(t) ? enclose(t) : t);
-    else if (hasLoc) body = digitStart || bracketStart || sub.enclose || /[([{]/.test(t) ? enclose(t) : t;
+    // after a locant: enclose names that start with a locant/multiplier, amino-like and substituted
+    // groups, "(R)oxy" and names with inner marks (PubChem keeps "(4-methylphenyl)sulfonyl" bare)
+    else if (hasLoc)
+      body = digitStart || sub.enclose || MULT_START.test(t) || (bracketStart ? /oxy$/.test(t) : /[([{]/.test(t)) ? enclose(t) : t;
     else if (locantless) body = digitStart || sub.enclose ? enclose(t) : t;
     else body = /[([{]/.test(t.slice(1)) && !bracketStart ? enclose(t) : t;
     return { key: alphaKey(t), text: t, locs, body };
