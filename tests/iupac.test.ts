@@ -3,6 +3,7 @@ import { parseSmiles } from '../src/chem/smiles';
 import { nameMolecule } from '../src/chem/iupac';
 import { assignCIP } from '../src/chem/cip';
 import { Mol } from '../src/chem/mol';
+import { ms } from './perf';
 
 // Expected names were cross-checked against PubChem (OpenEye LexiChem) where possible.
 // Deliberate differences from PubChem are marked "PubChem: …" with the reason:
@@ -1020,6 +1021,6 @@ describe('nameMolecule API', () => {
     const t0 = performance.now();
     for (const d of drugs) nameMolecule(d);
     const per = (performance.now() - t0) / drugs.length;
-    expect(per).toBeLessThan(50);
+    expect(per).toBeLessThan(ms(50));
   });
 });

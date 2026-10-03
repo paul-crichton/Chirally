@@ -7,6 +7,7 @@ import { layoutMol } from '../src/chem/layout2d';
 import { clean2D } from '../src/chem/clean2d';
 import { TEMPLATE_GROUPS, templateMol, allTemplates } from '../src/chem/templates';
 import { clearRingLayoutCache } from '../src/chem/layout/ringsys';
+import { ms } from './perf';
 
 // Geometry thresholds (bond length unit = 1):
 //  • ordinary molecules (chains, fused/spiro rings, macrocycles): every bond within 0.9–1.1;
@@ -529,14 +530,14 @@ describe('performance', () => {
     }
     times.sort((a, b) => a - b);
     // target is < 30 ms on a desktop machine; leave headroom for slow CI runners
-    expect(times[2]).toBeLessThan(90);
+    expect(times[2]).toBeLessThan(ms(90));
 
     const big = 'C' + 'COCCOC'.repeat(60) + 'c1ccc(cc1)' + 'CCCCCCCCCC'.repeat(14) + 'O';
     const m = parseSmiles(big);
     expect(m.atoms.length).toBeGreaterThan(500);
     const t0 = performance.now();
     layoutMol(m);
-    expect(performance.now() - t0).toBeLessThan(3000);
+    expect(performance.now() - t0).toBeLessThan(ms(3000));
     checkLayout('500+ atoms', big, m);
   });
 });

@@ -9,6 +9,7 @@ import {
   readMolfile, writeMolfile, readSDF, writeSDF, hasCoordinates, readRxn, writeRxn, readCDXML, writeCDXML,
   readCML, writeCML, readXYZ, writeXYZ, detectFormat, FormatError, parseXml,
 } from '../src/chem/formats';
+import { ms } from './perf';
 
 // ───────────── helpers ─────────────
 
@@ -1105,6 +1106,6 @@ describe('robustness', () => {
         }
       }
     }
-    expect(Date.now() - t0).toBeLessThan(20000);
+    expect(Date.now() - t0).toBeLessThan(ms(20000));
   });
 });

@@ -3,6 +3,7 @@ import { parseSmiles } from '../src/chem/smiles';
 import { assignCIP, _mancudeDuplicateZ } from '../src/chem/cip';
 import { Mol } from '../src/chem/mol';
 import { perceiveStereo2D } from '../src/chem/stereo2d';
+import { ms } from './perf';
 
 // Expected descriptors were checked against PubChem IUPAC names (OpenEye Lexichem) where PubChem
 // provides them, and against RDKit's new CIP labeller (rdCIPLabeler, Hanson et al. 2018) for r/s,
@@ -252,7 +253,7 @@ describe('CIP: input from 2D drawings and robustness', () => {
     const t0 = performance.now();
     const r = assignCIP(c60);
     expect(r.centers.size).toBe(0);
-    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(performance.now() - t0).toBeLessThan(ms(5000));
   });
   it('labels a 15-centre macrolide quickly', () => {
     // erythromycin A (PubChem isomeric SMILES)
@@ -260,7 +261,7 @@ describe('CIP: input from 2D drawings and robustness', () => {
       'CC[C@@H]1[C@@]([C@@H]([C@H](C(=O)[C@@H](C[C@@]([C@@H]([C@H]([C@@H]([C@H](C(=O)O1)C)O[C@H]2C[C@@]([C@H]([C@@H](O2)C)O)(C)OC)C)O[C@H]3[C@@H]([C@H](C[C@H](O3)C)N(C)C)O)(C)O)C)C)O)(C)O';
     const t0 = performance.now();
     const r = assignCIP(parseSmiles(smi));
-    expect(performance.now() - t0).toBeLessThan(500);
+    expect(performance.now() - t0).toBeLessThan(ms(500));
     expect(r.centers.size).toBe(18);
     expect([...r.centers.values()].every((l) => l === 'R' || l === 'S')).toBe(true);
   });

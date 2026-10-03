@@ -6,6 +6,7 @@ import {
   embed3D, optimizeGeometry, conformerSearch, generate3D, toXYZ, UFF, coordsOf, stereoReport, addExplicitHydrogens,
   typeUFF, uffEnergy,
 } from '../src/chem/3d/index';
+import { ms } from './perf';
 
 type V3 = [number, number, number];
 
@@ -402,7 +403,7 @@ describe('determinism, components, export and performance', () => {
     const t0 = performance.now();
     const r = optimizeGeometry(m);
     const dt = performance.now() - t0;
-    expect(dt).toBeLessThan(1000);
+    expect(dt).toBeLessThan(ms(1000));
     expect(r.converged).toBe(true);
     for (const t of input.tetra) expect(inputTetraOK(m, t)).toBe(true);
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseSmiles } from '../src/chem/smiles';
 import { computeProperties, crippenContribs, detectFunctionalGroups } from '../src/chem/properties';
+import { ms } from './perf';
 
 const props = (smi: string) => computeProperties(parseSmiles(smi));
 
@@ -352,6 +353,6 @@ describe('performance', () => {
       computeProperties(m);
       best = Math.min(best, performance.now() - t0);
     }
-    expect(best).toBeLessThan(20);
+    expect(best).toBeLessThan(ms(20));
   });
 });
