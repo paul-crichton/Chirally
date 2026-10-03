@@ -103,6 +103,9 @@ export const TEMPLATES: TemplateDef[] = [
   { name: 'pyrido[3,4-b]indole', rings: ['1,2,3,4,4a,9a', '4a,4b,8a,9,9a', '4b,5,6,7,8,8a'], het: { '2': 'N', '9': 'N' } },
   // ── tetracyclic (steroid skeleton; PubChem uses steroid numbering for this system) ──
   { name: 'cyclopenta[a]phenanthrene', rings: ['1,2,3,4,5,10', '5,6,7,8,9,10', '8,9,11,12,13,14', '13,14,15,16,17'] },
+  { name: 'chrysene', rings: ['1,2,3,4,4a,12a', '4a,4b,10b,11,12,12a', '4b,5,6,6a,10a,10b', '6a,7,8,9,10,10a'] },
+  { name: 'tetracene', rings: ['1,2,3,4,4a,12a', '4a,5,5a,11a,12,12a', '5a,6,6a,10a,11,11a', '6a,7,8,9,10,10a'] },
+  { name: 'triphenylene', rings: ['1,2,3,4,4a,12b', '4a,4b,8a,8b,12a,12b', '4b,5,6,7,8,8a', '8b,9,10,11,12,12a'] },
   // ── pyrene ──
   { name: 'pyrene', rings: ['1,2,3,3a,10b,10a', '3a,4,5,5a,10c,10b', '5a,6,7,8,8a,10c', '8a,9,10,10a,10b,10c'] },
   // ── saturated polycycles ──

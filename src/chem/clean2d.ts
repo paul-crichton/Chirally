@@ -98,7 +98,7 @@ export function clean2D(mol: Mol, opts: CleanOptions = {}): void {
   relax(xy, n, cons, { iterations: opts.iterations ?? 200, movable, atoms: all, repelDist: 1.0, repelWeight: 0.4, exclude: excl });
 
   // 4. clashes, then a short polish
-  const dbActive = drawnDb.filter((d) => isActiveDb(mol, info, d));
+  const dbActive = drawnDb.filter((d) => isActiveDb(info, d));
   const stereoOK = (moved: number[]) => {
     const ms = new Set(moved);
     for (const d of dbActive) {
@@ -126,14 +126,14 @@ export function clean2D(mol: Mol, opts: CleanOptions = {}): void {
   if (allMove) {
     alignOnto(xy, orig, false);
     const q = quality(mol, xy);
-    if (q > 0.5) {
+    if (q > 1.5) {
       const alt = mol.clone();
       alt.dbStereo = drawnDb;
       alt.tetra = drawnTetra;
       layoutMol(alt);
       const axy = new Float64Array(2 * n);
       alt.atoms.forEach((a, i) => { axy[2 * i] = a.x; axy[2 * i + 1] = a.y; });
-      alignOnto(axy, orig, true);
+      alignOnto(axy, orig, false);
       if (quality(mol, axy) + 0.5 < q) result = axy;
     }
   }
@@ -268,7 +268,7 @@ function isLinear(mol: Mol, u: number): boolean {
 
 // ───────────────────────────── stereo helpers ─────────────────────────────
 
-function isActiveDb(mol: Mol, info: RingInfo, d: DbSpec): boolean {
+function isActiveDb(info: RingInfo, d: DbSpec): boolean {
   const rs = smallestRingSizeOfBond(info, d.bond);
   return rs === 0 || rs >= 8;
 }

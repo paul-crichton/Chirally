@@ -478,7 +478,9 @@ export function buildRingParent(g: NGraph, sys: number): RingParentResult {
     }
     const vb = vonBaeyer(g, atoms, adj);
     if (vb) {
-      if (vb.fused && hetCount.size) return { parent: null, error: 'fused heterocyclic ring system not supported' };
+      // ortho-fused bicycles with two rings of ≥5 members require fusion nomenclature (P-52.2.4.3)
+      const sizes = vb.stem.match(/\[(\d+)\.(\d+)\.(\d+)\]/);
+      if (vb.fused && sizes && +sizes[2] + 2 >= 5) return { parent: null, error: 'fused ring system not supported (no template)' };
       if ([...hetCount.keys()].some((el) => !REPL_PREFIX[el])) return { parent: null, error: 'unsupported heteroatom in ring' };
       const rp = base();
       rp.style = 'ene';

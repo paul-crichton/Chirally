@@ -10,9 +10,9 @@
 //   4. orient (long axis horizontal, bonds snapped to the 30°/90°/150° lattice);
 // then components are arranged left-to-right (counter-ions next to their partner) and wedges are
 // drawn for mol.tetra. Bond length is 1, y points down. Deterministic.
-import { Mol, DbSpec } from './mol';
+import { Mol, DbSpec, TetraSpec, tetraCcwForOrder } from './mol';
 import { perceiveRings, RingInfo, smallestRingSizeOfBond } from './rings';
-import { assignWedgesFromSpecs } from './stereo2d';
+import { assignWedgesFromSpecs, perceiveStereo2D } from './stereo2d';
 import { layoutRingSystem, SysLayout } from './layout/ringsys';
 import { Pt, TAU, normAngle, angleTo, cross3, fitXform, applyXform } from './layout/geom';
 import { resolveOverlaps, relaxComponent } from './layout/overlap';
@@ -23,6 +23,7 @@ export interface LayoutOptions {
 }
 
 const GAP = 1.5; // spacing between components
+const CROWD = 0.75; // placement choices avoid non-bonded contacts closer than this
 
 /** Assigns 2D depiction coordinates to all atoms (or only those not in opts.fixed). */
 export function layoutMol(mol: Mol, opts: LayoutOptions = {}): void {
@@ -31,14 +32,48 @@ export function layoutMol(mol: Mol, opts: LayoutOptions = {}): void {
   const fixed = opts.fixed && opts.fixed.size ? new Set([...opts.fixed].filter((i) => i >= 0 && i < n)) : null;
   if (fixed && fixed.size === n) return;
   const info = perceiveRings(mol);
-  const L = new Layout(mol, info, fixed);
-  L.run();
+  // stereo expressed only by an existing drawing (wedges, double-bond geometry) survives a re-layout
+  const drawn = drawnStereo(mol, info, fixed);
+  const savedDb = mol.dbStereo, savedTetra = mol.tetra;
+  if (drawn.db) mol.dbStereo = drawn.db;
+  let L: Layout;
+  try {
+    L = new Layout(mol, info, fixed);
+    L.run();
+  } finally {
+    mol.dbStereo = savedDb;
+  }
   for (let i = 0; i < n; i++) {
     if (fixed && fixed.has(i)) continue;
     mol.atoms[i].x = L.xy[2 * i];
     mol.atoms[i].y = L.xy[2 * i + 1];
   }
   if (mol.tetra.length) drawWedges(mol, info, fixed);
+  else if (drawn.tetra && drawn.tetra.length) {
+    mol.tetra = drawn.tetra;
+    try { drawWedges(mol, info, fixed); } finally { mol.tetra = savedTetra; }
+  }
+}
+
+/**
+ * Stereo of the current drawing, used when mol.tetra / mol.dbStereo are empty but the molecule
+ * already has meaningful coordinates (e.g. re-layout of an edited structure). With fixed atoms only
+ * specs entirely within the fixed part are trusted.
+ */
+function drawnStereo(mol: Mol, info: RingInfo, fixed: Set<number> | null): { tetra?: TetraSpec[]; db?: DbSpec[] } {
+  const needT = !mol.tetra.length && mol.bonds.some((b) => b.style === 'wedge' || b.style === 'hash');
+  const needD = !mol.dbStereo.length && mol.bonds.some((b) => b.order === 2);
+  if (!needT && !needD) return {};
+  for (const b of mol.bonds) {
+    const d = Math.hypot(mol.atoms[b.a].x - mol.atoms[b.b].x, mol.atoms[b.a].y - mol.atoms[b.b].y);
+    if (d < 0.05 && !(fixed && !(fixed.has(b.a) && fixed.has(b.b)))) return {};
+  }
+  const p = perceiveStereo2D(mol.clone(), { rings: info });
+  const ok = (atoms: number[]) => !fixed || atoms.every((a) => a < 0 || fixed.has(a));
+  return {
+    tetra: needT ? p.tetra.filter((t) => ok([t.center, ...t.nbrs])) : undefined,
+    db: needD ? p.db.filter((d) => ok([mol.bonds[d.bond].a, mol.bonds[d.bond].b, d.a, d.b])) : undefined,
+  };
 }
 
 /** Draws wedges for mol.tetra, leaving stereocentres among fixed atoms untouched. */
@@ -62,6 +97,22 @@ function drawWedges(mol: Mol, info: RingInfo, fixed: Set<number> | null): void {
   for (const [bi, k] of keep) {
     const b = mol.bonds[bi];
     b.a = k.a; b.b = k.b; b.style = k.style as typeof b.style;
+  }
+  // a fixed centre whose re-placed neighbours changed the meaning of its wedges is redrawn
+  const fixedSpecs = all.filter((t) => fixed.has(t.center));
+  if (!fixedSpecs.length) return;
+  const now = perceiveStereo2D(mol.clone(), { rings: info, requireAsymmetry: false }).tetra;
+  const broken = fixedSpecs.filter((t) => {
+    const u = now.find((x) => x.center === t.center);
+    if (!u || [...u.nbrs].sort().join() !== [...t.nbrs].sort().join()) return true;
+    return tetraCcwForOrder(t, u.nbrs) !== u.ccw;
+  });
+  if (!broken.length) return;
+  mol.tetra = broken;
+  try {
+    assignWedgesFromSpecs(mol, info);
+  } finally {
+    mol.tetra = all;
   }
 }
 
@@ -188,7 +239,7 @@ class Layout {
         for (const j of c) {
           if (j === self || (skip && skip.has(j))) continue;
           const d = Math.hypot(this.xy[2 * j] - p.x, this.xy[2 * j + 1] - p.y);
-          if (d < 1.05 && this.mol.bondBetween(self, j) < 0) s += (1.05 - d) * (1.05 - d) * (d < 0.5 ? 10 : 1);
+          if (d < CROWD && this.mol.bondBetween(self, j) < 0) s += (CROWD - d) * (CROWD - d) * (d < 0.5 ? 10 : 1);
         }
       }
     }
@@ -643,7 +694,10 @@ class Layout {
     // the core (largest) ring system decides a few special cases
     const core = this.coreSystem(comp);
     const coreMethod = core >= 0 ? this.sysLayout(core).method : null;
-    const keepRotation = coreMethod === 'template' || coreMethod === 'projected';
+    // perspective cage drawings keep their designed orientation when the cage dominates
+    const coreSize = core >= 0 ? this.sysLayout(core).pos.size : 0;
+    const heavy = comp.filter((a) => this.mol.atoms[a].el !== 'H').length;
+    const keepRotation = (coreMethod === 'template' || coreMethod === 'projected') && coreSize >= 0.4 * heavy;
     let cx = 0, cy = 0;
     for (const a of comp) { cx += xy[2 * a]; cy += xy[2 * a + 1]; }
     cx /= comp.length; cy /= comp.length;
@@ -679,10 +733,12 @@ class Layout {
       let s = 0;
       for (const t of bondAngles) s -= Math.cos(6 * (t + rot));
       s /= bondAngles.length || 1;
-      s -= ratio > 1.15 ? 0.12 * Math.min(1, (ratio - 1.15) * 2) * (d / 30) ** 2 : 0;
+      // elongated molecules: the principal axis wins over a perfect lattice fit
+      s -= ratio > 1.15 ? Math.min(0.6, 0.24 * (ratio - 1.15)) * (d / 30) ** 2 : 0;
       if (s > bestS + 1e-9) { bestS = s; bestRot = rot; }
     }
-    if (keepRotation) bestRot = 0; // perspective cage drawings keep their designed orientation
+    if (keepRotation) bestRot = 0;
+    if (l2 <= 1e-6 * Math.max(l1, 1e-9)) bestRot = -phi; // collinear (H2, CO2, alkynes): horizontal
     const loneRing = this.loneRingRotation(comp, cx, cy);
     if (loneRing !== null) bestRot = loneRing;
     const c = Math.cos(bestRot), s = Math.sin(bestRot);
@@ -721,6 +777,7 @@ class Layout {
     if (hn && hy / hn > 0.02 * h) flipY = true;
     else if (!hn && xy[2 * first + 1] < -0.02 * h) flipY = true;
     if (keepRotation) flipY = false;
+    if (loneRing !== null) flipX = flipY = false; // already in its canonical orientation
     const ringD = core >= 0 ? this.steroidFiveRing(core) : null;
     if (ringD) {
       // steroids: conventional orientation with ring D at the upper right

@@ -4,7 +4,7 @@ import { docToJSON, docFromJSON, docToMol, createDoc, insertMol } from '../doc/d
 import { buildScene } from '../render/scene';
 import { primsToSVG, primsToCanvas } from '../render/draw';
 import { downloadBlob, toast } from './dom';
-import { formats, chemMol, canonicalSmiles } from './chem';
+import { formats, chemMol, canonicalSmiles, smilesToMol } from './chem';
 import { expandAbbreviations } from '../chem/abbreviations';
 import { perceiveStereo2D } from '../chem/stereo2d';
 import { Mol } from '../chem/mol';
@@ -215,7 +215,6 @@ export async function docFromHash(hash: string): Promise<ChemDoc | null> {
   if (!m) {
     const s = /smiles=([^&]+)/.exec(hash);
     if (s) {
-      const { smilesToMol } = await import('./chem');
       const doc = createDoc();
       insertMol(doc, smilesToMol(decodeURIComponent(s[1])));
       return doc;

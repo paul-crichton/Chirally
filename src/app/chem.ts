@@ -10,7 +10,7 @@ import { computeProperties, MolProperties } from '../chem/properties';
 import { nameMolecule } from '../chem/iupac';
 import { assignCIP } from '../chem/cip';
 import { ChemDoc } from '../doc/types';
-import { docToMol, adjacency, fragments, insertMol, createDoc } from '../doc/document';
+import { docToMol, adjacency, fragments, insertMol, createDoc, fragmentOf } from '../doc/document';
 import * as F from '../chem/formats';
 import { buildScene } from '../render/scene';
 
@@ -184,11 +184,8 @@ export function expandLabel(doc: ChemDoc, atomId: number): boolean {
   const g = abbreviationMol(a.abbrev);
   if (!g) return false;
   const adj = adjacency(doc);
-  const frag = new Set<number>([atomId]);
-  for (const bid of adj.get(atomId) ?? []) {
-    const b = doc.bonds.get(bid)!;
-    frag.add(b.a === atomId ? b.b : b.a);
-  }
+  // the whole fragment takes part (fixed) so the expanded group avoids the rest of the drawing
+  const frag = new Set<number>(fragmentOf(doc, atomId, adj));
   // Build a local mol: neighbours (fixed) + group atoms (to lay out)
   const { mol, index } = docToMol(doc, frag);
   const ai = index.get(atomId)!;

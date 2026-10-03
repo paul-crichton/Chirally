@@ -57,7 +57,7 @@ export function relax(xy: Float64Array, n: number, cons: DistCon[], opt: RefineO
       });
     }
   };
-  const project = (i: number, j: number, d: number, w: number, minOnly: boolean) => {
+  const project = (i: number, j: number, d: number, w: number, minOnly: boolean, tag: number) => {
     const mi = canMove(i) ? 1 : 0, mj = canMove(j) ? 1 : 0;
     if (!mi && !mj) return;
     let dx = xy[2 * j] - xy[2 * i];
@@ -65,8 +65,8 @@ export function relax(xy: Float64Array, n: number, cons: DistCon[], opt: RefineO
     let r = Math.hypot(dx, dy);
     if (minOnly && r >= d) return;
     if (r < 1e-9) {
-      // coincident atoms: separate along a deterministic pseudo-random direction
-      const a = ((i * 7919 + j * 104729) % 360) * (Math.PI / 180);
+      // coincident atoms: separate along a deterministic direction (independent of atom numbering)
+      const a = ((tag * 137.508) % 360) * (Math.PI / 180);
       dx = Math.cos(a) * 1e-3; dy = Math.sin(a) * 1e-3; r = 1e-3;
     }
     const k = ((r - d) / r) * w / (mi + mj);
@@ -75,7 +75,7 @@ export function relax(xy: Float64Array, n: number, cons: DistCon[], opt: RefineO
   };
   for (let it = 0; it < iters; it++) {
     if (repel > 0 && it % 8 === 0) rebuild();
-    for (const c of cons) project(c.i, c.j, c.d, c.w, !!c.min);
-    for (let p = 0; p < pairs.length; p += 2) project(pairs[p], pairs[p + 1], repel, repW, true);
+    for (let k = 0; k < cons.length; k++) { const c = cons[k]; project(c.i, c.j, c.d, c.w, !!c.min, k); }
+    for (let p = 0; p < pairs.length; p += 2) project(pairs[p], pairs[p + 1], repel, repW, true, cons.length + p);
   }
 }

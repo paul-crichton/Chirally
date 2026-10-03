@@ -1,6 +1,8 @@
 // Name assembly helpers: alphanumerical ordering, enclosing marks, multiplying prefixes, elision.
 import { multiplier, multiplierComplex } from './numerals';
 
+const MULT_START = /^(di|tri|tetra|penta|hexa|hepta|octa|nona|deca|undeca|dodeca|icosa|bis|tris)/;
+
 /** A substituent prefix as produced by the namer. */
 export interface SubName {
   /** Prefix text without outer enclosing marks, e.g. "methyl", "2-methylpropyl", "(2-methylpropan-2-yl)oxy". */
@@ -15,6 +17,8 @@ export interface SubName {
   phenyl?: boolean;
   /** Ring-substituted phenyl ("4-chlorophenyl") – for "anilino". */
   phenylLike?: boolean;
+  /** Locant of the free valence in the substituent's own numbering (skeletal substituents). */
+  fvLoc?: number;
 }
 
 /** Sort key for alphanumerical ordering of prefixes (P-14.5): italic parts, locants and marks ignored. */
@@ -97,7 +101,9 @@ export function formatPrefixes(items: PrefixItem[], locantless: boolean): string
     const bracketStart = /^[([{]/.test(t);
     let body: string;
     if (n > 1 && sub.compound) body = multiplierComplex(n) + enclose(t);
-    else if (n > 1) body = multiplier(n) + (/[\d([{]/.test(t) || sub.enclose ? enclose(t) : t);
+    // simple prefixes are enclosed after a multiplier if they contain locants/marks or themselves begin
+    // with a multiplier-like syllable ("di(propan-2-yl)", "di(hexadecanoyloxy)", P-16.5.1)
+    else if (n > 1) body = multiplier(n) + (/[\d([{]/.test(t) || sub.enclose || MULT_START.test(t) ? enclose(t) : t);
     else if (hasLoc) body = digitStart || bracketStart || sub.enclose ? enclose(t) : t;
     else if (locantless) body = digitStart || sub.enclose ? enclose(t) : t;
     else body = /[([{]/.test(t.slice(1)) && !bracketStart ? enclose(t) : t;
@@ -105,16 +111,22 @@ export function formatPrefixes(items: PrefixItem[], locantless: boolean): string
   });
   entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.text < b.text ? -1 : a.text > b.text ? 1 : 0));
   let out = '';
+  let sepParen = false; // the last piece was a simple prefix enclosed only to separate it
   for (const e of entries) {
     const piece = (e.locs.length ? e.locs.join(',') + '-' : '') + e.body;
+    const wasSep = sepParen;
+    sepParen = false;
     if (!out) {
       out = piece;
       continue;
     }
     if (e.locs.length) out += '-' + piece;
+    else if (wasSep && !/^[([{]/.test(piece)) out += piece;
     else if (/[)\]}]$/.test(out)) out += '-' + piece;
-    else if (locantless && !/^[([{]/.test(piece)) out += enclose(piece);
-    else if (locantless) out += '-' + piece;
+    else if (locantless && !/^[([{]/.test(piece)) {
+      out += enclose(piece);
+      sepParen = true;
+    } else if (locantless) out += '-' + piece;
     else out += piece;
   }
   return out;

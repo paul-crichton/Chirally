@@ -1,22 +1,34 @@
 // Local IUPAC name generation.
 //
-// Conventions (see also namer.ts):
-//  • IUPAC 2013 substitutive nomenclature; where PubChem (OpenEye LexiChem) uses a form that is also
+// Public API: nameMolecule(mol, { stereo }) → { name, warnings, locants }. Never throws.
+//
+// Conventions (details in namer.ts / ringnames.ts):
+//  • IUPAC 2013 substitutive nomenclature. Where PubChem (OpenEye LexiChem) uses a form that is also
 //    acceptable IUPAC, that form is preferred so names can be cross-checked against PubChem:
-//    "2-acetyloxybenzoic acid", "5-methyl-2-propan-2-ylcyclohexan-1-ol", "1-phenylethanone",
-//    "prop-2-enyl", "benzyl", "tert-butyl", hyphen after a closing bracket ("(4-hydroxyphenyl)-phenylmethanone").
-//  • Hydro prefixes and indicated hydrogen follow PubChem: positions that are saturated only because
-//    they carry =O, a non-hydrogen substituent or cannot form a ring double bond are implied and not
-//    cited ("1,3,7-trimethylpurine-2,6-dione", "chromen-2-one", "1H-pyridin-2-one", "1-methylindole").
-//    Added hydrogen is written as indicated hydrogen in front ("3,4-dihydro-2H-naphthalen-1-one").
-//    Numbering follows IUPAC (suffixes before hydro prefixes), so e.g. 2(5H)-furanone is
-//    "5H-furan-2-one" where PubChem writes "2H-furan-5-one".
-//  • Stereodescriptors: "(2S)-…", "(2E,4E)-…"; a single E/Z descriptor is cited without locant
-//    ("(E)-but-2-ene"). Descriptors of stereocentres inside substituents are placed inside the
-//    substituent's enclosing marks ("2-[(1R)-1-phenylethyl]…").
-//  • Salts: cations then anions ("sodium benzoate", "disodium butanedioate",
-//    "N,N,N-trimethylhexadecan-1-aminium bromide"). Water and hydrogen halides in a mixture with one
-//    other species become "hydrate"/"hydrochloride". Other multi-component inputs are joined with "; ".
+//    "2-acetyloxybenzoic acid", "5-methyl-2-propan-2-ylcyclohexan-1-ol", "1-phenylethanone" (ketone
+//    locant omitted on two-carbon parents), "prop-2-enyl", "benzyl", "tert-butyl", "pentoxy",
+//    a hyphen after a closing bracket ("(4-hydroxyphenyl)-phenylmethanone"), "cyclohexene".
+//  • Deliberate differences from PubChem: trivial names not retained by IUPAC 2013 are not used
+//    (propan-2-ylbenzene not cumene, 1,4-dimethylbenzene not xylene, ethyne, trichloromethane);
+//    enclosing marks nest as ( ) [ ] { } (PubChem only uses ( ) and [ ]); cations are "-aminium"
+//    (PubChem: "azanium"); oximes are "N-hydroxy…imine"; anhydrides are "acetic anhydride";
+//    numbering always follows the IUPAC rule order (indicated hydrogen, suffixes, hydro/ene, prefixes).
+//  • Hydro prefixes and indicated hydrogen follow PubChem: ring positions that are saturated only
+//    because they carry =O, a non-hydrogen substituent, or cannot form a ring double bond are implied
+//    and not cited ("1,3,7-trimethylpurine-2,6-dione", "chromen-2-one", "1-methylindole"); added
+//    hydrogen is written as indicated hydrogen in front ("1H-pyridin-2-one",
+//    "3,4-dihydro-2H-naphthalen-1-one"). Hydro prefixes are cited next to the parent, after the
+//    alphabetised substituent prefixes ("6-methoxy-1,2,3,4-tetrahydronaphthalene").
+//  • Stereodescriptors: "(2S)-…", "(2E,4E)-…"; a single E/Z descriptor of one parent is cited without
+//    locant and first ("(E)-but-2-ene", "(Z,12R)-…"). Descriptors of substituents are placed inside
+//    the substituent's enclosing marks ("3-[(2S)-1-methylpyrrolidin-2-yl]pyridine").
+//  • Salts: cations then anions, alphabetical, with multiplying prefixes ("sodium benzoate",
+//    "disodium butanedioate", "N,N,N-trimethylhexadecan-1-aminium bromide"). Water / hydrogen halides
+//    accompanying a single species become "hydrate" / "hydrochloride". Other multi-component inputs
+//    are joined with "; " in alphabetical order ("ethanol; 2-hydroxybenzoic acid").
+//  • Unsupported structures (name = null, reason in warnings): pseudo atoms, radicals, charged carbon,
+//    metals/organometallics, polycyclic von Baeyer systems (> 2 rings) and fused ring systems without a
+//    template, thioesters/thioacids, phosphines and other uncommon heteroatom functions.
 import { Mol } from '../mol';
 import { expandAbbreviations } from '../abbreviations';
 import { assignCIP } from '../cip';
@@ -125,7 +137,7 @@ function nameInner(mol: Mol, opts: { stereo?: boolean }, warnings: string[]): Iu
     warnings.push(...namer.warnings);
     if (cip) {
       const total = cip.centers.size + cip.bonds.size;
-      if (namer.stereoUsed.size < total) stereoMissing = true;
+      if (countDescriptors(r.name) < total) stereoMissing = true;
     }
     names.push({ name: r.name, charge, key: formula + '|' + r.name, formula, locants: r.locants, graphIdx: idx });
   }
@@ -140,6 +152,16 @@ function nameInner(mol: Mol, opts: { stereo?: boolean }, warnings: string[]): Iu
     }
   }
   return { name, warnings: [...new Set(warnings)], locants };
+}
+
+/** Number of CIP descriptors cited in a name ("(2S,3R)-…", "[(E)-…]"). */
+function countDescriptors(name: string): number {
+  let n = 0;
+  for (const m of name.matchAll(/\(([^()]*)\)-/g)) {
+    const parts = m[1].split(',');
+    if (parts.every((p) => /^(\d+[a-z]?'*)?[RSrsEZ]$/.test(p))) n += parts.length;
+  }
+  return n;
 }
 
 /** Component subgraph with index map (local → whole-graph index). */
@@ -177,7 +199,8 @@ const INORGANIC: Record<string, string> = {
   'H2O2': 'hydrogen peroxide', 'H2O4S1': 'sulfuric acid', 'O4S1-2': 'sulfate', 'H1O4S1-1': 'hydrogen sulfate',
   'H1N1O3': 'nitric acid', 'N1O3-1': 'nitrate', 'N1O2-1': 'nitrite', 'H3O4P1': 'phosphoric acid', 'O4P1-3': 'phosphate',
   'H1O4P1-2': 'hydrogen phosphate', 'H2O4P1-1': 'dihydrogen phosphate', 'C1O3-2': 'carbonate', 'C1H1O3-1': 'hydrogen carbonate',
-  'C1O2': 'carbon dioxide', 'C1O1': 'carbon monoxide', 'C1N1-1': 'cyanide', 'Cl1O4-1': 'perchlorate', 'B1F4-1': 'tetrafluoroborate',
+  'C1O2': 'carbon dioxide', 'C1Cl2O1': 'carbonyl dichloride', 'B1H3O3': 'boric acid', 'H3P1': 'phosphane',
+  'Cl2O1S1': 'thionyl dichloride', 'Cl2O2S1': 'sulfuryl dichloride', 'Cl3O1P1': 'phosphoryl trichloride', 'Cl3P1': 'trichlorophosphane', 'C1O1': 'carbon monoxide', 'C1N1-1': 'cyanide', 'Cl1O4-1': 'perchlorate', 'B1F4-1': 'tetrafluoroborate',
   'F6P1-1': 'hexafluorophosphate', 'O3S1-2': 'sulfite', 'H1O3S1-1': 'hydrogen sulfite', 'Cl1O3-1': 'chlorate', 'Cl1O1-1': 'hypochlorite',
   'O1-2': 'oxide', 'S1-2': 'sulfide', 'H1-1': 'hydride', 'C1H1N1': 'formonitrile', 'H1+1': 'hydron', 'C1H4': 'methane',
   'C1S2': 'carbon disulfide', 'O3': 'ozone', 'O2': 'dioxygen', 'N2': 'dinitrogen', 'H2': 'dihydrogen', 'Cl2': 'chlorine', 'Br2': 'bromine', 'I2': 'iodine',
@@ -241,6 +264,7 @@ function combine(names: ComponentName[]): string {
   } else {
     for (const x of [...cations, ...anions]) main.unshift(x.n > 1 ? x.c.name + ' (' + x.n + ')' : x.c.name);
   }
+  main.sort((a, b) => (alphaKey(a) < alphaKey(b) ? -1 : alphaKey(a) > alphaKey(b) ? 1 : a < b ? -1 : 1));
   const parts = [saltName, ...main].filter(Boolean);
   let out = parts.join('; ');
   if (addends.length) out += ' ' + addends.join(' ');

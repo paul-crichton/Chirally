@@ -41,13 +41,68 @@ export function layoutRingSystem(mol: Mol, info: RingInfo, sysIdx: number): SysL
   });
   const ctx: SysCtx = { mol, info, rings, atoms, atomSet, bonds };
 
+  // cache: the key captures everything the computation reads (local topology, SSSR ring order,
+  // substituent load, E/Z specs), so a hit returns exactly what a fresh computation would
+  const key = cacheKey(ctx);
+  const hit = CACHE.get(key);
+  if (hit) {
+    const pos = new Map<number, Pt>();
+    atoms.forEach((a, i) => pos.set(a, { x: hit.xy[2 * i], y: hit.xy[2 * i + 1] }));
+    return { pos, score: hit.score, method: hit.method };
+  }
+  const res = computeRingSystem(ctx);
+  if (CACHE.size >= CACHE_MAX) CACHE.delete(CACHE.keys().next().value as string);
+  const xy: number[] = [];
+  const pos = new Map<number, Pt>(); // canonical (sorted) iteration order, as for cache hits
+  for (const a of atoms) {
+    const p = res.pos.get(a)!;
+    xy.push(p.x, p.y);
+    pos.set(a, { x: p.x, y: p.y });
+  }
+  CACHE.set(key, { xy, score: res.score, method: res.method });
+  return { pos, score: res.score, method: res.method };
+}
+
+const CACHE = new Map<string, { xy: number[]; score: number; method: SysLayout['method'] }>();
+const CACHE_MAX = 256;
+
+/** Empties the ring-system layout cache (tests, memory pressure). */
+export function clearRingLayoutCache(): void {
+  CACHE.clear();
+}
+
+function cacheKey(ctx: SysCtx): string {
+  const { mol, info, atoms, bonds, rings } = ctx;
+  const local = new Map<number, number>();
+  atoms.forEach((a, i) => local.set(a, i));
+  const bpos = new Map<number, number>();
+  bonds.forEach((b, i) => bpos.set(b, i));
+  const L = (a: number) => local.get(a)!;
+  const parts: string[] = [String(atoms.length)];
+  parts.push(bonds.map((bi) => L(mol.bonds[bi].a) + '-' + L(mol.bonds[bi].b)).join(','));
+  parts.push(rings.map((r) => info.rings[r].map(L).join('.') + '/' + info.ringBonds[r].map((b) => bpos.get(b)).join('.')).join(';'));
+  parts.push(atoms.map((a) => {
+    let heavy = 0, h = 0;
+    for (const j of mol.neighbors(a)) if (!local.has(j)) { if (mol.atoms[j].el === 'H') h++; else heavy++; }
+    return heavy + ':' + h;
+  }).join(','));
+  parts.push(mol.dbStereo.filter((d) => bpos.has(d.bond)).map((d) => {
+    const b = mol.bonds[d.bond];
+    const enc = (r: number) => (local.has(r) ? String(L(r)) : mol.bondBetween(b.a, r) >= 0 ? 'xa' : 'xb');
+    return [bpos.get(d.bond), enc(d.a), enc(d.b), d.cis ? 1 : 0].join(':');
+  }).join(';'));
+  return parts.join('|');
+}
+
+function computeRingSystem(ctx: SysCtx): SysLayout {
+  const { mol, info, rings, atoms, bonds } = ctx;
   if (rings.length === 1) return singleRing(ctx);
 
   const tmpl = matchCageTemplate(mol, atoms, bonds);
   if (tmpl) return { pos: tmpl, score: 0, method: 'template' };
 
   // Ring-by-ring fusion, trying a few start rings (best heuristic first).
-  const starts = [...rings].sort((p, q) => startRingKey(ctx, q) - startRingKey(ctx, p) || p - q);
+  const starts = [...rings].sort((p, q) => startRingKey(ctx, q) - startRingKey(ctx, p) || rings.indexOf(p) - rings.indexOf(q));
   const cands: { pos: Map<number, Pt>; bridged: boolean; score: number }[] = [];
   // macrocycles whose E/Z specs need trans ring bonds start from their turn-sequence polygon
   for (const r of rings) {
@@ -89,14 +144,7 @@ export function layoutRingSystem(mol: Mol, info: RingInfo, sysIdx: number): SysL
     }
   }
   out.sort((p, q) => p.score - q.score);
-  if (debugHook) debugHook(out.map((o) => `${o.method}:${o.score.toFixed(2)}`).join(' ') + ` | fused best ${best.score.toFixed(2)} bridged=${best.bridged}`);
   return out[0];
-}
-
-/** Diagnostics hook (tests/tools only). */
-export let debugHook: ((msg: string) => void) | null = null;
-export function setLayoutDebugHook(f: ((msg: string) => void) | null): void {
-  debugHook = f;
 }
 
 /** Preference for the first ring: many fused neighbours, then larger rings. */
@@ -204,18 +252,23 @@ function ringCis(mol: Mol, d: DbSpec, p: number, a: number, b: number, q: number
 /** Closed polygon following the turn sequence (equal edges), relaxed to close exactly. */
 function turnPolygon(ctx: SysCtx, ring: number[], turns: number[]): Map<number, Pt> {
   const n = ring.length;
-  const P = turns.filter((t) => t > 0).length;
-  const M = n - P;
+  const nConvex = turns.filter((t) => t > 0).length;
+  const M = n - nConvex;
   const reflex = Math.PI / 3;
-  let convex = (TAU + M * reflex) / P;
-  if (convex > (2 * Math.PI) / 3) convex = (2 * Math.PI) / 3;
+  // convex vertices next to a reflex one belong to a zig-zag (e.g. an all-trans polyene) and
+  // turn by the same 60°, so that zig-zags come out straight; the others share what is left
+  const zig = turns.map((t, k) => t > 0 && (turns[(k + 1) % n] < 0 || turns[(k - 1 + n) % n] < 0));
+  const nZig = zig.filter(Boolean).length;
+  let free = (TAU + (M - nZig) * reflex) / (nConvex - nZig);
+  const useZig = nConvex - nZig > 0 && free > 0.05 && free < (2 * Math.PI) / 3;
+  if (!useZig) free = Math.min((TAU + M * reflex) / nConvex, (2 * Math.PI) / 3);
+  const turnAt = (k: number) => (turns[k] < 0 ? -reflex : useZig && zig[k] ? reflex : free);
   const pts: Pt[] = [];
   let x = 0, y = 0, h = 0;
   for (let k = 0; k < n; k++) {
     pts.push({ x, y });
-    const t = turns[(k + 1) % n] > 0 ? convex : -reflex;
     x += Math.cos(h); y += Math.sin(h);
-    h += t;
+    h += turnAt((k + 1) % n);
   }
   // distribute closure error linearly
   const ex = x, ey = y;
@@ -230,14 +283,34 @@ function turnPolygon(ctx: SysCtx, ring: number[], turns: number[]): Map<number, 
   for (let k = 0; k < n; k++) {
     const a = ring[k], b = ring[(k + 1) % n], c = ring[(k + 2) % n];
     cons.push({ i: a, j: b, d: 1, w: 1 });
-    const turn = turns[(k + 1) % n] > 0 ? convex : reflex;
-    const interior = Math.PI - turn;
+    const interior = Math.PI - Math.abs(turnAt((k + 1) % n));
     cons.push({ i: a, j: c, d: 2 * Math.sin(interior / 2), w: 0.5 });
   }
   const nAll = ctx.mol.atoms.length;
   const excl = new Set<number>();
   for (const c of cons) excl.add(pairKey(c.i, c.j, nAll));
-  relax(xy, nAll, cons, { iterations: 300, atoms: idx, repelDist: 1.2, repelWeight: 0.3, exclude: excl });
+  // relax, then reflect vertices whose turn direction came out wrong (that would flip E/Z), repeat
+  const P = (a: number): Pt => ({ x: xy[2 * a], y: xy[2 * a + 1] });
+  for (let round = 0; round < 6; round++) {
+    relax(xy, nAll, cons, { iterations: round ? 120 : 300, atoms: idx, repelDist: 1.2, repelWeight: 0.3, exclude: excl });
+    let area = 0;
+    for (let k = 0; k < n; k++) { const p = P(ring[k]), q = P(ring[(k + 1) % n]); area += p.x * q.y - q.x * p.y; }
+    // convex vertices turn with the polygon's orientation
+    const orient = Math.sign(area) || 1;
+    let wrong = 0;
+    for (let k = 0; k < n; k++) {
+      const a = ring[(k - 1 + n) % n], c = ring[k], b = ring[(k + 1) % n];
+      const t = Math.sign(cross3(P(a), P(c), P(b)));
+      if (t === 0 || t * orient === turns[k]) continue;
+      const pa = P(a), pb = P(b), pc = P(c);
+      const dx = pb.x - pa.x, dy = pb.y - pa.y, l2 = dx * dx + dy * dy || 1;
+      const u = ((pc.x - pa.x) * dx + (pc.y - pa.y) * dy) / l2;
+      xy[2 * c] = 2 * (pa.x + u * dx) - pc.x;
+      xy[2 * c + 1] = 2 * (pa.y + u * dy) - pc.y;
+      wrong++;
+    }
+    if (!wrong) break;
+  }
   for (const a of idx) pos.set(a, { x: xy[2 * a], y: xy[2 * a + 1] });
   return pos;
 }
@@ -433,12 +506,12 @@ function placeArc(ctx: SysCtx, e1: number, e2: number, free: number[], pos: Map<
       cands.push(m);
     }
   }
-  const best = pickCandidate(ctx, cands, pos, free, [e1, e2]);
+  const best = pickCandidate(ctx, cands, pos, free);
   best.forEach((p, a) => { if (!pos.has(a)) pos.set(a, p); });
 }
 
 /** Clash/crossing penalty of candidate positions (for `fresh` atoms) against already placed atoms. */
-function candidateClash(ctx: SysCtx, cand: Map<number, Pt>, pos: Map<number, Pt>, fresh: number[], ends: number[] = []): number {
+function candidateClash(ctx: SysCtx, cand: Map<number, Pt>, pos: Map<number, Pt>, fresh: number[]): number {
   const { mol } = ctx;
   let s = 0;
   for (const a of fresh) {
@@ -453,12 +526,10 @@ function candidateClash(ctx: SysCtx, cand: Map<number, Pt>, pos: Map<number, Pt>
   const get = (a: number) => cand.get(a) ?? pos.get(a);
   const freshSet = new Set(fresh);
   const newBonds: [number, number][] = [];
-  const chain = ends.length === 2 ? [ends[0], ...fresh, ends[1]] : fresh;
   for (const bi of ctx.bonds) {
     const b = mol.bonds[bi];
     if ((freshSet.has(b.a) || freshSet.has(b.b)) && get(b.a) && get(b.b)) newBonds.push([b.a, b.b]);
   }
-  void chain;
   for (const bi of ctx.bonds) {
     const b = mol.bonds[bi];
     if (freshSet.has(b.a) || freshSet.has(b.b)) continue;
@@ -472,7 +543,7 @@ function candidateClash(ctx: SysCtx, cand: Map<number, Pt>, pos: Map<number, Pt>
   return s;
 }
 
-function pickCandidate(ctx: SysCtx, cands: Map<number, Pt>[], pos: Map<number, Pt>, fresh: number[], ends: number[] = []): Map<number, Pt> {
+function pickCandidate(ctx: SysCtx, cands: Map<number, Pt>[], pos: Map<number, Pt>, fresh: number[]): Map<number, Pt> {
   // tie-break: farther from the centroid of placed atoms
   let cx = 0, cy = 0;
   for (const p of pos.values()) { cx += p.x; cy += p.y; }
@@ -482,7 +553,7 @@ function pickCandidate(ctx: SysCtx, cands: Map<number, Pt>[], pos: Map<number, P
     let fx = 0, fy = 0;
     for (const a of fresh) { const p = c.get(a)!; fx += p.x; fy += p.y; }
     fx /= fresh.length || 1; fy /= fresh.length || 1;
-    const s = candidateClash(ctx, c, pos, fresh, ends) - 0.01 * Math.hypot(fx - cx, fy - cy);
+    const s = candidateClash(ctx, c, pos, fresh) - 0.01 * Math.hypot(fx - cx, fy - cy);
     if (s < bestS) { bestS = s; best = c; }
   }
   return best;
@@ -550,7 +621,6 @@ function envelopeCandidates(ctx: SysCtx): Map<number, Pt>[] {
   const sorted = [...cycles.values()].sort((a, b) => b.length - a.length || a[0] - b[0]);
   const out: Map<number, Pt>[] = [];
   for (const cyc of sorted.slice(0, 3)) {
-    const m = cyc.length;
     const xy = new Map<number, Pt>();
     regularPolygon(cyc, { x: 0, y: 0 }, Math.PI / 2, 1).forEach((p, a) => xy.set(a, p));
     const inner = ctx.atoms.filter((a) => !xy.has(a));
@@ -565,8 +635,6 @@ function envelopeCandidates(ctx: SysCtx): Map<number, Pt>[] {
         xy.set(a, { x: x / l.length, y: y / l.length });
       }
     }
-    // shrink the polygon toward a bond length compatible with the inner bridges
-    void m;
     out.push(xy);
   }
   return out;
@@ -579,7 +647,7 @@ function envelopeCandidates(ctx: SysCtx): Map<number, Pt>[] {
  * all pairwise distances), 120° angles at macrocycle atoms that belong to no small ring, and
  * a minimum separation for every pair of neighbours of an atom (keeps angles from collapsing).
  */
-export function ringSystemConstraints(mol: Mol, info: RingInfo, rings: number[], bonds: number[], wScale = 1): DistCon[] {
+export function ringSystemConstraints(mol: Mol, info: RingInfo, rings: number[], bonds: number[], wScale = 1, start?: Map<number, Pt>): DistCon[] {
   const cons: DistCon[] = [];
   const n = mol.atoms.length;
   const have = new Set<number>();
@@ -607,10 +675,14 @@ export function ringSystemConstraints(mol: Mol, info: RingInfo, rings: number[],
         }
       }
     } else {
+      // macrocycle atoms outside small rings keep the angle of the starting geometry (round
+      // polygon, or turn sequence honouring E/Z); 120° when no start is known
       for (let i = 0; i < m; i++) {
         const c = ring[(i + 1) % m];
         if (inSmall.has(c)) continue;
-        add({ i: ring[i], j: ring[(i + 2) % m], d: Math.sqrt(3), w: 0.3 * wScale });
+        const pa = start?.get(ring[i]), pb = start?.get(ring[(i + 2) % m]);
+        const d = pa && pb ? Math.min(2, Math.max(1.2, dist(pa, pb))) : Math.sqrt(3);
+        add({ i: ring[i], j: ring[(i + 2) % m], d, w: (start ? 0.15 : 0.3) * wScale });
       }
     }
   }
@@ -658,7 +730,7 @@ function relaxSystem(ctx: SysCtx, start: Map<number, Pt>, wScale = 1): Map<numbe
   const xy = new Float64Array(nAll * 2);
   for (const [a, p] of start) { xy[2 * a] = p.x; xy[2 * a + 1] = p.y; }
   unfoldRings(ctx, xy);
-  const cons = ringSystemConstraints(mol, info, ctx.rings, ctx.bonds, wScale);
+  const cons = ringSystemConstraints(mol, info, ctx.rings, ctx.bonds, wScale, start);
   // E/Z of large-ring double bonds: 1-4 distances of the in-system substituents
   for (const d of systemDbSpecs(ctx)) {
     const b = mol.bonds[d.bond];

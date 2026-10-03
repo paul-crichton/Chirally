@@ -98,12 +98,18 @@ export function matchCageTemplate(mol: Mol, atoms: number[], bonds: number[]): M
   return null;
 }
 
-/** How much room each template atom has for substituents (widest free gap, facing outwards). */
+/**
+ * How much room each template atom has for substituents: clearance of a probe point one bond
+ * length out along the bisector of the atom's widest free gap (distance to other atoms/bonds).
+ */
 function exposure(t: CageTemplate, adj: Set<number>[]): number[] {
   const n = t.xy.length;
-  let cx = 0, cy = 0;
-  for (const [x, y] of t.xy) { cx += x; cy += y; }
-  cx /= n; cy /= n;
+  const segDist = (px: number, py: number, a: number[], b: number[]) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l2 = dx * dx + dy * dy || 1;
+    const u = Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / l2));
+    return Math.hypot(px - a[0] - u * dx, py - a[1] - u * dy);
+  };
   return t.xy.map(([x, y], i) => {
     const angs = [...adj[i]].map((j) => Math.atan2(t.xy[j][1] - y, t.xy[j][0] - x)).sort((a, b) => a - b);
     let gap = 0, mid = 0;
@@ -111,8 +117,11 @@ function exposure(t: CageTemplate, adj: Set<number>[]): number[] {
       const a = angs[k], b = k + 1 < angs.length ? angs[k + 1] : angs[0] + 2 * Math.PI;
       if (b - a > gap) { gap = b - a; mid = (a + b) / 2; }
     }
-    const ox = x - cx, oy = y - cy, ol = Math.hypot(ox, oy) || 1;
-    return gap + 0.5 * ((Math.cos(mid) * ox + Math.sin(mid) * oy) / ol);
+    const px = x + Math.cos(mid), py = y + Math.sin(mid);
+    let clear = 1.2;
+    for (let j = 0; j < n; j++) if (j !== i) clear = Math.min(clear, Math.hypot(px - t.xy[j][0], py - t.xy[j][1]));
+    for (const [a, b] of t.edges) if (a !== i && b !== i) clear = Math.min(clear, segDist(px, py, t.xy[a], t.xy[b]));
+    return clear + (0.2 * gap) / Math.PI;
   });
 }
 

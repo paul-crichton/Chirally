@@ -173,7 +173,9 @@ export function resolveOverlaps(mol: Mol, xy: Float64Array, info: RingInfo, opt:
   };
 
   const tried = new Set<string>();
-  for (let round = 0; round < 40; round++) {
+  // deterministic work budget (atoms moved over all trial moves) keeps huge, crowded molecules fast
+  let budget = Math.max(80000, 120 * atoms.length);
+  for (let round = 0; round < 40 && budget > 0; round++) {
     const clashes = findClashes().filter((c) => c.sev >= pen(TRIGGER));
     if (!clashes.length) break;
     let bestGain = 0.01, bestMove: { moved: number[]; to: Float64Array } | null = null;
@@ -181,6 +183,7 @@ export function resolveOverlaps(mol: Mol, xy: Float64Array, info: RingInfo, opt:
     for (const cl of clashes.slice(0, 8)) for (const bi of pathBonds(cl.i, cl.j)) if (rotatable(bi)) cands.add(bi);
     {
       for (const bi of cands) {
+        if (budget <= 0) break;
         const b = mol.bonds[bi];
         // move the smaller side (the other one only if the smaller contains fixed atoms)
         const sA = side(bi, b.a), sB = side(bi, b.b);
@@ -189,8 +192,10 @@ export function resolveOverlaps(mol: Mol, xy: Float64Array, info: RingInfo, opt:
         for (const [pivot, end] of order) {
           if (usedSide) break;
           const moved = side(bi, end);
-          if (moved.length < 2 || moved.length > atoms.length - 1) continue;
+          if (moved.length > atoms.length - 1) continue;
           if (moved.some((i) => !opt.movable[i])) continue;
+          // the larger side only moves when the smaller one is anchored, and never when huge
+          if (moved.length * 2 > atoms.length + 2 && order[0][1] !== end && moved.length > 12) continue;
           usedSide = true;
           const mset = new Set(moved);
           const before = localScore(moved, mset);
@@ -200,8 +205,8 @@ export function resolveOverlaps(mol: Mol, xy: Float64Array, info: RingInfo, opt:
           const px = xy[2 * pivot], py = xy[2 * pivot + 1];
           const ex = xy[2 * end], ey = xy[2 * end + 1];
           const moves: { f: (x: number, y: number) => [number, number]; cost: number }[] = [];
-          // mirror across the bond axis
-          {
+          // mirror across the bond axis (pointless for a single terminal atom)
+          if (moved.length > 1) {
             const dx = ex - px, dy = ey - py;
             const l2 = dx * dx + dy * dy || 1;
             moves.push({
@@ -217,6 +222,7 @@ export function resolveOverlaps(mol: Mol, xy: Float64Array, info: RingInfo, opt:
             const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
             moves.push({ f: (x, y) => [px + c * (x - px) - s * (y - py), py + s * (x - px) + c * (y - py)], cost: 0.15 * Math.abs(deg) / 30 });
           }
+          budget -= moved.length * (moves.length + 1);
           for (const mv of moves) {
             apply(moved, mv.f);
             const ok = opt.stereoOK(moved);
@@ -260,7 +266,8 @@ export function relaxComponent(mol: Mol, xy: Float64Array, atoms: number[], opt:
     const nb = mol.neighbors(a);
     for (let i = 0; i < nb.length; i++) {
       for (let j = i + 1; j < nb.length; j++) {
-        cons.push({ i: nb[i], j: nb[j], d: d(nb[i], nb[j]), w: 0.25 });
+        // keep current angles, but never below ~85° (collapsed angles are what we are fixing)
+        cons.push({ i: nb[i], j: nb[j], d: Math.max(d(nb[i], nb[j]), 1.35), w: 0.25 });
         excl.add(pairKey(nb[i], nb[j], n));
       }
     }

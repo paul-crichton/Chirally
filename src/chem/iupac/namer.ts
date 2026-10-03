@@ -18,24 +18,31 @@ export class NamingError extends Error {}
 
 /** Principal characteristic group classes – lower value = more senior (P-41). */
 export const CLS = {
-  ANION_COO: 10,
-  ANION_SO3: 11,
-  ANION_INORG: 12,
-  ANION_O: 13,
-  CATION: 20,
+  ANION_COO: 10, // carboxylates (and carbamates)
+  ANION_SO3: 11, // sulfonates
+  ANION_INORG: 12, // sulfate/phosphate monoester anions ("dodecyl sulfate")
+  ANION_O: 13, // alcoholates / phenolates
+  CATION: 20, // aminium, ring -ium
   ACID: 30,
   CARBAMIC: 31,
   SULFONIC: 32,
   SULFINIC: 33,
-  ESTER: 40,
+  BORONIC: 34,
+  PHOSPHONIC: 35,
+  ESTER: 40, // carboxylic esters and anhydrides
   SULFONATE_ESTER: 41,
   CARBAMATE: 42,
-  ESTER_INORG: 43,
+  ESTER_INORG: 43, // carbonate, sulfate, phosphate, nitrate esters
   ACYL_HALIDE: 50,
   SULFONYL_HALIDE: 51,
   AMIDE: 60,
+  THIOAMIDE: 60.5,
   UREA: 61,
+  THIOUREA: 61.5,
   SULFONAMIDE: 62,
+  AMIDINE: 63,
+  GUANIDINE: 64,
+  HYDRAZIDE: 65,
   NITRILE: 70,
   ALDEHYDE: 80,
   KETONE: 90,
@@ -46,15 +53,15 @@ export const CLS = {
   IMINE: 120,
 };
 
-type GCType = 'acid' | 'carboxylate' | 'ester' | 'amide' | 'acylhalide' | 'aldehyde' | 'nitrile' | 'carbonic' | 'bad';
+type GCType = 'acid' | 'carboxylate' | 'ester' | 'amide' | 'acylhalide' | 'aldehyde' | 'nitrile' | 'carbonic' | 'amidine' | 'guanidine' | 'hydrazide' | 'thioamide' | 'thiourea' | 'hetpart' | 'bad';
 
 type SuffixKind =
   | 'acid' | 'carboxylate' | 'ester' | 'acylhalide' | 'amide' | 'nitrile' | 'aldehyde'
   | 'one' | 'thione' | 'ol' | 'olate' | 'thiol' | 'amine' | 'aminium' | 'imine'
-  | 'sulfonic' | 'sulfonate' | 'sulfonamide' | 'sulfonylhalide' | 'sulfinic' | 'ium'
+  | 'sulfonic' | 'sulfonate' | 'sulfonamide' | 'sulfonylhalide' | 'sulfinic' | 'ium' | 'amidine' | 'hydrazide' | 'thioamide'
   | 'yl' | 'ylidene' | 'ylidyne' | 'oyl' | 'carbonyl';
 
-const GC_KINDS = new Set<SuffixKind>(['acid', 'carboxylate', 'ester', 'acylhalide', 'amide', 'nitrile', 'aldehyde']);
+const GC_KINDS = new Set<SuffixKind>(['acid', 'carboxylate', 'ester', 'acylhalide', 'amide', 'nitrile', 'aldehyde', 'amidine', 'hydrazide', 'thioamide']);
 
 interface GroupInfo {
   cls: number;
@@ -62,6 +69,8 @@ interface GroupInfo {
   gc: number;
   /** Nitrogen whose other substituents become N-prefixes (-1 if none). */
   n: number;
+  /** Second nitrogen whose substituents are cited with N' (amidines: imino N). */
+  n2?: number;
   consumed: number[];
   /** Ester: oxygen and alkyl attachment atom. */
   esterO: number;
@@ -97,8 +106,9 @@ interface BuildOpts {
 }
 
 export interface BuildResult {
+  /** Complete name (prefixes + parent + suffix, with stereodescriptors). */
   text: string;
-  /** Parent + suffix part only (for functional class names). */
+  /** Data used to compare alternative parents (P-44/P-45 criteria). */
   suffixLocs: number[];
   unsatLocs: number[];
   nPrefixes: number;
@@ -106,9 +116,11 @@ export interface BuildResult {
   alpha: string[];
   locants: Map<number, string>;
   /** Ester alkyl groups with the locant of their acid group. */
-  esterAlkyls: { sub: SubName; loc: string }[];
+  esterAlkyls: { sub: SubName; loc: string; acyl?: boolean }[];
   nSuffix: number;
   hasPrefixes: boolean;
+  /** Tie-break between alternative acid components of esters: alkyl groups with low free-valence locant first. */
+  esterKey: string;
   /** Chain, free valence at C1, order 1 (oxy contraction). */
   oxyContract: boolean;
   phenyl: boolean;
@@ -124,6 +136,8 @@ interface SuffixItem {
   atom: number;
   kind: SuffixKind;
   halide?: string;
+  /** Nitrogen of N-type suffix groups (amine, amide, …) for N/N' labels. */
+  nAtom?: number;
 }
 
 export interface CIPInfo {
@@ -146,7 +160,6 @@ export class Namer {
   g: NGraph;
   warnings: string[] = [];
   cip: CIPInfo | null;
-  stereoUsed = new Set<string>();
   gcType: (GCType | null)[];
   skel: boolean[];
   private ringCache = new Map<number, RingParent>();
@@ -188,9 +201,12 @@ export class Namer {
     }
     const het = g.nb[c].filter((j) => g.el[j] !== 'C' && !g.inRing[j] && g.order(c, j) === 1);
     if (tN >= 0) {
-      if (het.length) return 'bad'; // cyanate / thiocyanate / cyanamide carbon (named from the heteroatom)
+      if (het.length) return 'hetpart'; // cyanate / thiocyanate / cyanamide carbon (named from the heteroatom)
       return 'nitrile';
     }
+    // isocyanate / isothiocyanate carbon (R–N=C=O, R–N=C=S) and isocyanide carbon
+    if (dN >= 0 && (dO >= 0 || dS >= 0) && g.degree(c) === 2) return 'hetpart';
+    if (g.degree(c) === 1 && g.charge[c] === -1 && g.el[g.nb[c][0]] === 'N' && g.order(c, g.nb[c][0]) === 3) return 'hetpart';
     if (dO >= 0) {
       if (het.length === 0) return g.h[c] >= 1 ? 'aldehyde' : null;
       if (het.length === 2) return 'carbonic';
@@ -200,14 +216,26 @@ export class Namer {
         const o = g.others(x, c);
         if (o.length === 0) return 'acid';
         if (o.length === 1 && (g.el[o[0]] === 'C' || g.inRing[o[0]]) && g.charge[x] === 0) {
-          // anhydrides (O–C(=O) on both sides) are not supported
-          if (!g.inRing[o[0]] && this.isCarbonylC(o[0]) && g.el[o[0]] === 'C') return 'bad';
+          // anhydrides (O–C(=O) on both sides) are handled as esters whose "alkyl" part is an acyl group
+          if (!g.inRing[o[0]] && g.el[o[0]] === 'C' && (g.terminalDouble(o[0], 'S') >= 0)) return 'bad';
           return 'ester';
         }
         return 'bad';
       }
-      if (g.el[x] === 'N') return g.charge[x] === 0 ? 'amide' : 'bad';
+      if (g.el[x] === 'N') {
+        if (g.charge[x] !== 0) return 'bad';
+        const nn = g.others(x, c).filter((j) => g.el[j] === 'N' && !g.inRing[j]);
+        if (nn.length === 1 && g.order(x, nn[0]) === 1 && g.charge[nn[0]] === 0 && g.others(nn[0], x).every((j) => g.el[j] === 'C')) return 'hydrazide';
+        return 'amide';
+      }
       if (HALOGENS.has(g.el[x])) return 'acylhalide';
+      return 'bad';
+    }
+    if (dS >= 0 && het.length === 1 && g.el[het[0]] === 'N' && g.charge[het[0]] === 0) return 'thioamide';
+    if (dS >= 0 && het.length === 2 && het.every((j) => g.el[j] === 'N' && g.charge[j] === 0)) return 'thiourea';
+    if (dN >= 0 && het.length && !g.inRing[dN] && g.charge[dN] === 0 && g.order(c, dN) === 2) {
+      if (het.length === 1 && g.el[het[0]] === 'N' && g.charge[het[0]] === 0) return 'amidine';
+      if (het.length === 2 && het.every((j) => g.el[j] === 'N' && g.charge[j] === 0)) return 'guanidine';
       return 'bad';
     }
     if ((dS >= 0 || dN >= 0) && het.length) return 'bad';
@@ -222,8 +250,32 @@ export class Namer {
   gcInfo(gc: number): GroupInfo | null {
     const g = this.g;
     const t = this.gcType[gc];
-    if (!t || t === 'bad' || t === 'carbonic') return null;
+    if (!t || t === 'bad' || t === 'carbonic' || t === 'guanidine' || t === 'hetpart' || t === 'thiourea') return null;
     const base = (cls: number, kind: SuffixKind, consumed: number[]): GroupInfo => ({ cls, kind, gc, n: -1, consumed, esterO: -1, esterR: -1, halide: '' });
+    if (t === 'thioamide') {
+      const sx = g.terminalDouble(gc, 'S');
+      const na = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 1 && !g.inRing[j])!;
+      const gi = base(CLS.THIOAMIDE, 'thioamide', [sx, na]);
+      gi.n = na;
+      return gi;
+    }
+    if (t === 'hydrazide') {
+      const o = g.terminalDouble(gc, 'O');
+      const n1 = g.nb[gc].find((j) => g.el[j] === 'N' && !g.inRing[j])!;
+      const n2 = g.others(n1, gc).find((j) => g.el[j] === 'N')!;
+      const gi = base(CLS.HYDRAZIDE, 'hydrazide', [o, n1, n2]);
+      gi.n = n1;
+      gi.n2 = n2;
+      return gi;
+    }
+    if (t === 'amidine') {
+      const ni = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 2)!;
+      const na = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 1 && !g.inRing[j])!;
+      const gi = base(CLS.AMIDINE, 'amidine', [ni, na]);
+      gi.n = na;
+      gi.n2 = ni;
+      return gi;
+    }
     if (t === 'nitrile') {
       const n = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 3)!;
       return base(CLS.NITRILE, 'nitrile', [n]);
@@ -418,9 +470,80 @@ export class Namer {
       const r = this.nameWithClass(cls);
       if (r) return r;
     }
+    const sp = classes.length ? null : this.nameHeteroParent();
+    if (sp) return sp;
     const r = this.nameWithClass(null);
     if (!r) throw new NamingError('no parent hydride found');
     return r;
+  }
+
+  /** Boron of a boronic acid R–B(OH)2 or phosphorus of a phosphonic acid R–P(=O)(OH)2: the carbon R, or -1. */
+  boronicHost(b: number): number {
+    const g = this.g;
+    if (g.charge[b] !== 0 || g.inRing[b]) return -1;
+    if (g.el[b] === 'P') {
+      if (g.degree(b) !== 4 || g.countTerminalDouble(b, 'O') !== 1) return -1;
+    } else if (g.el[b] !== 'B' || g.degree(b) !== 3) return -1;
+    const oh = g.nb[b].filter((j) => g.el[j] === 'O' && g.degree(j) === 1 && g.h[j] === 1 && g.order(b, j) === 1);
+    const c = g.nb[b].filter((j) => this.skel[j] && g.order(b, j) === 1);
+    return oh.length === 2 && c.length === 1 ? c[0] : -1;
+  }
+
+  /**
+   * Acyclic heteroatom parent hydrides that are senior to carbon parents when no characteristic group
+   * is expressed as a suffix (P-44.1.2: N > … > Si > … > C): hydrazine, diazene, silane.
+   */
+  private nameHeteroParent(): { name: string; locants: Map<number, string> } | null {
+    const g = this.g;
+    const subsOf = (a: number, ...ex: number[]) => g.others(a, ...ex).map((y) => this.nameSubstituent(y, a, g.order(a, y), ''));
+    const firstKey = (l: SubName[]) => l.map((x) => alphaKey(x.text)).sort()[0] ?? '~';
+    for (let a = 0; a < g.n; a++) {
+      if (g.el[a] !== 'N' || g.inRing[a] || g.charge[a] !== 0) continue;
+      for (const b of g.nb[a]) {
+        if (b < a || g.el[b] !== 'N' || g.inRing[b] || g.charge[b] !== 0) continue;
+        const o = g.order(a, b);
+        const okSubs = (n: number, m: number) => g.others(n, m).every((y) => (this.skel[y] || g.inRing[y]) && g.order(n, y) === 1);
+        if (!okSubs(a, b) || !okSubs(b, a)) continue;
+        if (o === 1) {
+          let [p, q] = [a, b];
+          let sp = subsOf(p, q), sq = subsOf(q, p);
+          if (sq.length > sp.length || (sq.length === sp.length && firstKey(sq) < firstKey(sp))) {
+            [p, q] = [q, p];
+            [sp, sq] = [sq, sp];
+          }
+          const total = sp.length + sq.length;
+          const items: PrefixItem[] = [
+            ...sp.map((x) => ({ sub: x, locant: total === 1 ? '' : '1', value: 1 })),
+            ...sq.map((x) => ({ sub: x, locant: total === 1 ? '' : '2', value: 2 })),
+          ];
+          return { name: formatPrefixes(items, total === 1) + 'hydrazine', locants: new Map([[p, '1'], [q, '2']]) };
+        }
+        if (o === 2) {
+          const items: PrefixItem[] = [...subsOf(a, b), ...subsOf(b, a)].map((x) => ({ sub: x, locant: '', value: 0 }));
+          return { name: formatPrefixes(items, true) + 'diazene', locants: new Map() };
+        }
+      }
+    }
+    // phosphanes and phosphanium ions: "triphenylphosphane", "tetraphenylphosphanium"
+    for (let a = 0; a < g.n; a++) {
+      if (g.el[a] !== 'P' || g.inRing[a] || g.h[a] !== 0) continue;
+      if (g.nb[a].some((y) => g.order(a, y) !== 1 || !(this.skel[y] || g.inRing[y]))) continue;
+      if (g.charge[a] === 0 && g.degree(a) === 3) {
+        const items: PrefixItem[] = subsOf(a).map((x) => ({ sub: x, locant: '', value: 0 }));
+        return { name: formatPrefixes(items, true) + 'phosphane', locants: new Map() };
+      }
+      if (g.charge[a] === 1 && g.degree(a) === 4) {
+        const items: PrefixItem[] = subsOf(a).map((x) => ({ sub: x, locant: '', value: 0 }));
+        return { name: formatPrefixes(items, true) + 'phosphanium', locants: new Map() };
+      }
+    }
+    for (let a = 0; a < g.n; a++) {
+      if (g.el[a] !== 'Si' || g.inRing[a] || g.charge[a] !== 0) continue;
+      if (g.nb[a].some((y) => g.order(a, y) !== 1)) continue;
+      const items: PrefixItem[] = subsOf(a).map((x) => ({ sub: x, locant: '', value: 0 }));
+      return { name: formatPrefixes(items, true) + 'silane', locants: new Map() };
+    }
+    return null;
   }
 
   /** Candidate principal classes present in the molecule, most senior first. */
@@ -428,7 +551,7 @@ export class Namer {
     const g = this.g;
     const set = new Set<number>();
     for (let s = 0; s < g.n; s++) {
-      if (this.gcType[s] && this.gcType[s] !== 'carbonic') {
+      if (this.gcType[s] && this.gcType[s] !== 'carbonic' && this.gcType[s] !== 'guanidine' && this.gcType[s] !== 'hetpart' && this.gcType[s] !== 'thiourea') {
         const gi = this.gcInfo(s);
         if (gi) set.add(gi.cls);
       }
@@ -436,6 +559,10 @@ export class Namer {
         const c = this.carbonicClass(s);
         if (c < 999) set.add(c);
       }
+      if (this.gcType[s] === 'guanidine') set.add(CLS.GUANIDINE);
+      if (this.gcType[s] === 'thiourea') set.add(CLS.THIOUREA);
+      if (g.el[s] === 'B' && !g.inRing[s] && this.boronicHost(s) >= 0) set.add(CLS.BORONIC);
+      if (g.el[s] === 'P' && !g.inRing[s] && this.boronicHost(s) >= 0) set.add(CLS.PHOSPHONIC);
       if (!this.skel[s]) {
         const ic = this.inorganicCentre(s);
         if (ic) set.add(ic.cls);
@@ -453,6 +580,20 @@ export class Namer {
 
   private nameWithClass(cls: number | null): { name: string; locants: Map<number, string> } | null {
     if (cls === CLS.UREA || cls === CLS.CARBAMIC || cls === CLS.CARBAMATE) return this.nameCarbonic(cls);
+    if (cls === CLS.GUANIDINE) return this.nameGuanidine();
+    if (cls === CLS.THIOUREA) return this.nameCarbonic(cls);
+    if (cls === CLS.BORONIC || cls === CLS.PHOSPHONIC) {
+      // functional parents: "phenylboronic acid", "benzylphosphonic acid"
+      const el = cls === CLS.BORONIC ? 'B' : 'P';
+      for (let b = 0; b < this.g.n; b++) {
+        if (this.g.el[b] !== el) continue;
+        const c = this.boronicHost(b);
+        if (c < 0) continue;
+        const r = this.nameSubstituent(c, b, 1, '');
+        return { name: (startsAmbiguous(r.text) ? enclose(r.text) : r.text) + (el === 'B' ? 'boronic acid' : 'phosphonic acid'), locants: new Map() };
+      }
+      return null;
+    }
     if (cls === CLS.ESTER_INORG || cls === CLS.ANION_INORG) {
       const r = this.nameInorganicEster(cls);
       if (r) return r;
@@ -476,7 +617,16 @@ export class Namer {
   }
 
   private esterName(res: BuildResult): string {
-    const alk = res.esterAlkyls;
+    const alk = res.esterAlkyls.map((a) => (/^\(/.test(a.sub.text) ? { ...a, sub: { ...a.sub, text: '[' + a.sub.text + ']' } } : a));
+    if (alk.length === 1 && alk[0].acyl) {
+      // anhydride: "acetic anhydride", "acetic benzoic anhydride"
+      const toAcid = (t: string) => t.replace(/ate$/, 'ic');
+      const fromAcyl = (t: string) =>
+        t === 'acetyl' ? 'acetic' : t === 'formyl' ? 'formic' : t === 'benzoyl' ? 'benzoic' : t.replace(/carbonyl$/, 'carboxylic').replace(/oyl$/, 'oic').replace(/acetyl$/, 'acetic').replace(/benzoyl$/, 'benzoic');
+      const a = toAcid(res.text), b = fromAcyl(alk[0].sub.text);
+      if (a === b) return a + ' anhydride';
+      return [a, b].sort((p, q) => (alphaKey(p) < alphaKey(q) ? -1 : 1)).join(' ') + ' anhydride';
+    }
     const texts = new Set(alk.map((a) => a.sub.text));
     let pre: string;
     if (texts.size === 1) {
@@ -515,7 +665,7 @@ export class Namer {
   /** Can group carbon gc terminate a chain for the given principal class / context? */
   private chainExtendable(gc: number, cls: number | null, main: boolean): boolean {
     const t = this.gcType[gc];
-    if (!t || t === 'bad' || t === 'carbonic') return false;
+    if (!t || t === 'bad' || t === 'carbonic' || t === 'guanidine' || t === 'hetpart' || t === 'thiourea') return false;
     const gi = this.gcInfo(gc)!;
     if (cls !== null && gi.cls === cls) return true;
     if (t === 'nitrile') return false;
@@ -625,6 +775,8 @@ export class Namer {
       }
     }
     if (incl > 0) return { n: incl + other, incl: true };
+    // "-carboxylic acid" style on chains only when the groups cannot all be included (P-65.1.2.2)
+    if (att > 0 && att <= 2) return { n: other, incl: false };
     return { n: att + other, incl: false };
   }
 
@@ -694,7 +846,7 @@ export class Namer {
       }
     }
     if (!cands.length) return null;
-    let maxN = Math.max(...cands.map((c) => c.n));
+    const maxN = Math.max(...cands.map((c) => c.n));
     if (cls !== null && !fv && maxN === 0) return null;
     let best = cands.filter((c) => c.n === maxN);
     // rings before chains, then ring seniority / chain length and unsaturation
@@ -705,8 +857,6 @@ export class Namer {
       const res = this.buildName(c.parent, { cls, inclMode: c.incl, fv: fv ?? undefined, ctx });
       if (!top || this.compareResults(res, top.res) < 0) top = { parent: c.parent, res };
     }
-    void maxN;
-    maxN = 0;
     return top;
   }
 
@@ -717,6 +867,7 @@ export class Namer {
       b.nPrefixes - a.nPrefixes ||
       cmpNum(a.prefixLocs, b.prefixLocs) ||
       cmpStr(a.alpha, b.alpha) ||
+      (a.esterKey < b.esterKey ? -1 : a.esterKey > b.esterKey ? 1 : 0) ||
       (a.text < b.text ? -1 : a.text > b.text ? 1 : 0)
     );
   }
@@ -730,26 +881,26 @@ export class Namer {
     const consumed = new Set<number>();
     const suffixes: SuffixItem[] = [];
     const prefixes: Item[] = [];
-    const nSubs: { nAtom: number; host: number; sub: SubName }[] = [];
-    const esterAlk: { host: number; sub: SubName }[] = [];
+    const nSubs: { nAtom: number; host: number; sub: SubName; prime?: number }[] = [];
+    const esterAlk: { host: number; sub: SubName; acyl: boolean }[] = [];
     const fv = opts.fv;
     const cls = opts.cls;
 
-    const addNSubs = (nAtom: number, host: number, exclude: number[]) => {
+    const addNSubs = (nAtom: number, host: number, exclude: number[], prime?: number) => {
       for (const y of g.nb[nAtom]) {
         if (exclude.includes(y) || consumed.has(y)) continue;
-        nSubs.push({ nAtom, host, sub: this.nameSubstituent(y, nAtom, g.order(nAtom, y), '') });
+        nSubs.push({ nAtom, host, sub: this.nameSubstituent(y, nAtom, g.order(nAtom, y), ''), prime });
       }
     };
     const takeGroup = (s: number, gi: GroupInfo, inChain: boolean) => {
-      suffixes.push({ atom: s, kind: inChain || !GC_KINDS.has(gi.kind) ? gi.kind : gi.kind, halide: gi.halide });
-      (suffixes[suffixes.length - 1] as SuffixItem & { attached?: boolean });
+      suffixes.push({ atom: s, kind: gi.kind, halide: gi.halide, nAtom: gi.n >= 0 ? gi.n : undefined });
       for (const c of gi.consumed) consumed.add(c);
       if (gi.gc >= 0 && !inChain) consumed.add(gi.gc);
       if (gi.n >= 0) addNSubs(gi.n, s, [s, gi.gc, ...gi.consumed]);
+      if (gi.n2 !== undefined && gi.n2 >= 0) addNSubs(gi.n2, s, [s, gi.gc, ...gi.consumed], 1);
       if (gi.esterR >= 0) {
         const host = s;
-        esterAlk.push({ host, sub: this.nameSubstituent(gi.esterR, gi.esterO, 1, 'ester') });
+        esterAlk.push({ host, sub: this.nameSubstituent(gi.esterR, gi.esterO, 1, 'ester'), acyl: !!this.gcType[gi.esterR] });
         consumed.add(gi.esterR);
       }
     };
@@ -814,7 +965,8 @@ export class Namer {
     } else if (rp!.style === 'ene') {
       for (const a of rp!.atoms) for (const b of g.nb[a]) if (b > a && rp!.atomSet.has(b) && g.order(a, b) >= 2) unsatBonds.push({ a, b, order: g.order(a, b) });
     }
-    const fvAtom = fv ? fv.atom : -1;
+    // cationic ring nitrogens that are not the principal characteristic group
+    const iumAtoms = rp && cls !== CLS.CATION ? rp.atoms.filter((a) => g.el[a] === 'N' && g.charge[a] === 1) : [];
     // locant of a multiple bond: lower locant; ring closure 1–n of a monocycle → n; otherwise "a(b)"
     const nRingAtoms = rp ? rp.atoms.length : 0;
     const bondLoc = (N: Numbering, a: number, b: number): Loc => {
@@ -854,6 +1006,7 @@ export class Namer {
       }
       // (b) principal groups and free valence
       key.push(suffixes.map((s) => L(s.atom)).sort((p, q) => p - q));
+      if (iumAtoms.length) key.push(iumAtoms.map(L).sort((p, q) => p - q));
       // (c) hydro prefixes / ene-yne endings
       if (rp && rp.style === 'mancude' && !useSat) key.push(S.filter((a) => a !== ihAtom && !K.has(a)).map(L).sort((p, q) => p - q));
       else key.push(unsatBonds.map((b) => bondLoc(N, b.a, b.b).value).sort((p, q) => p - q));
@@ -923,6 +1076,10 @@ export class Namer {
         hydro = eSorted.slice(1);
       }
       parentCore = (ind >= 0 ? L(ind).label + 'H-' : '') + rp!.name;
+      if (iumAtoms.length) {
+        const il = iumAtoms.map((a) => L(a)).sort((p, q) => p.value - q.value);
+        parentCore = elide(parentCore, '-' + il.map((l) => l.label).join(',') + '-' + multiplier(il.length) + 'ium');
+      }
       if (hydro.length) hydroPart = hydro.map((a) => L(a).label).join(',') + '-' + multiplier(hydro.length) + 'hydro' + (/^\d/.test(parentCore) ? '-' : '');
     }
 
@@ -948,7 +1105,7 @@ export class Namer {
       const inChainGC = isChain && GC_KINDS.has(suffixKind) && !isAttachedGC(suffixes[0]);
       if (inChainGC || suffixKind === 'oyl') {
         const t: Record<string, string> = {
-          acid: 'oic acid', carboxylate: 'oate', ester: 'oate', amide: 'amide', nitrile: 'nitrile', aldehyde: 'al', oyl: 'oyl',
+          acid: 'oic acid', carboxylate: 'oate', ester: 'oate', amide: 'amide', nitrile: 'nitrile', aldehyde: 'al', oyl: 'oyl', amidine: 'imidamide', hydrazide: 'hydrazide', thioamide: 'thioamide',
           acylhalide: 'oyl ' + halideName(suffixes[0].halide),
         };
         let body = t[suffixKind];
@@ -958,7 +1115,7 @@ export class Namer {
         suffixText = body;
       } else {
         const t: Record<string, string> = {
-          acid: 'carboxylic acid', carboxylate: 'carboxylate', ester: 'carboxylate', amide: 'carboxamide', nitrile: 'carbonitrile',
+          acid: 'carboxylic acid', carboxylate: 'carboxylate', ester: 'carboxylate', amide: 'carboxamide', nitrile: 'carbonitrile', amidine: 'carboximidamide', hydrazide: 'carbohydrazide', thioamide: 'carbothioamide',
           aldehyde: 'carbaldehyde', one: 'one', thione: 'thione', ol: 'ol', olate: 'olate', thiol: 'thiol', amine: 'amine',
           aminium: 'aminium', imine: 'imine', sulfonic: 'sulfonic acid', sulfonate: 'sulfonate', sulfonamide: 'sulfonamide',
           sulfonylhalide: 'sulfonyl ' + halideName(suffixes[0].halide), sulfinic: 'sulfinic acid', ium: 'ium', yl: 'yl', ylidene: 'ylidene',
@@ -982,7 +1139,7 @@ export class Namer {
       const map: Record<string, string> = {
         acid: 'benzoic acid', carboxylate: 'benzoate', ester: 'benzoate', amide: 'benzamide', nitrile: 'benzonitrile',
         aldehyde: 'benzaldehyde', ol: 'phenol', olate: 'phenolate', amine: 'aniline', aminium: 'anilinium',
-        acylhalide: 'benzoyl ' + halideName(suffixes[0].halide),
+        acylhalide: 'benzoyl ' + halideName(suffixes[0].halide), hydrazide: 'benzohydrazide',
       };
       if (map[suffixKind!]) {
         fullParent = map[suffixKind!];
@@ -1003,13 +1160,14 @@ export class Namer {
     }
     if (isChain && chainLen <= 2 && suffixKind && (GC_KINDS.has(suffixKind) || suffixKind === 'oyl') && !isAttachedGC(suffixes[0])) {
       const c1: Record<string, string> = {
-        acid: 'formic acid', carboxylate: 'formate', ester: 'formate', amide: 'formamide', nitrile: 'formonitrile', aldehyde: 'formaldehyde', oyl: 'formyl',
+        acid: 'formic acid', carboxylate: 'formate', ester: 'formate', amide: 'formamide', nitrile: 'formonitrile', aldehyde: 'formaldehyde', oyl: 'formyl', hydrazide: 'formohydrazide',
       };
       const c2: Record<string, string> = {
-        acid: 'acetic acid', carboxylate: 'acetate', ester: 'acetate', amide: 'acetamide', nitrile: 'acetonitrile', aldehyde: 'acetaldehyde', oyl: 'acetyl',
+        acid: 'acetic acid', carboxylate: 'acetate', ester: 'acetate', amide: 'acetamide', nitrile: 'acetonitrile', aldehyde: 'acetaldehyde', oyl: 'acetyl', hydrazide: 'acetohydrazide',
         acylhalide: 'acetyl ' + halideName(suffixes[0].halide),
       };
       if (chainLen === 1 && suffixes.length === 1 && c1[suffixKind]) { fullParent = c1[suffixKind]; retainedDone = true; }
+      if (suffixKind === 'amidine') retainedDone = false;
       if (chainLen === 2 && suffixes.length === 1 && c2[suffixKind] && unsatBonds.length === 0) { fullParent = c2[suffixKind]; retainedDone = true; }
       if (chainLen === 2 && suffixes.length === 2 && suffixKind === 'acid') { fullParent = 'oxalic acid'; retainedDone = true; }
       if (chainLen === 2 && suffixes.length === 2 && (suffixKind === 'ester' || suffixKind === 'carboxylate')) { fullParent = 'oxalate'; retainedDone = true; }
@@ -1030,34 +1188,33 @@ export class Namer {
     }
 
     // prefixes
-    const locantless = omitAllLocants;
-    let omitPrefixLoc = omitAllLocants;
+    const locantless = omitAllLocants && nSubs.length === 0;
+    let omitPrefixLoc = locantless;
     if (isChain && chainLen === 2 && totalItems === 1) omitPrefixLoc = true;
     if (rp && rp.carbocycleMono && totalItems === 1 && unsatBonds.length === 0 && !fv) omitPrefixLoc = true;
-    const items: PrefixItem[] = [];
-    for (const p of prefixes) items.push({ sub: p.sub, locant: omitPrefixLoc ? '' : L(p.atom).label, value: L(p.atom).value });
-    // N-substituents: N, N', N'' by order of the host locant
-    const nAtoms = [...new Set(nSubs.map((x) => x.nAtom))];
-    const nHostLoc = (nA: number) => L(nSubs.find((x) => x.nAtom === nA)!.host).value;
-    const allN = suffixes.length; // all suffix nitrogens count for primes
-    void allN;
-    const suffixNs: number[] = [];
-    for (const s of suffixes) {
-      // nitrogen of each suffix group, ordered by locant
-      void s;
+    // S-oxides of ring sulfur without suffix: "thiolane 1,1-dioxide" (PubChem style)
+    let oxideText = '';
+    let prefList = prefixes;
+    if (rp && suffixes.length === 0 && !fv) {
+      const ox = prefixes.filter((p) => p.sub.text === 'oxo' && (g.el[p.atom] === 'S' || g.el[p.atom] === 'Se' || g.el[p.atom] === 'Te'));
+      if (ox.length) {
+        prefList = prefixes.filter((p) => !ox.includes(p));
+        const locs = ox.map((p) => L(p.atom)).sort((a, b) => a.value - b.value);
+        oxideText = ' ' + locs.map((l) => l.label).join(',') + '-' + multiplier(locs.length) + 'oxide';
+      }
     }
-    nAtoms.sort((p, q) => nHostLoc(p) - nHostLoc(q));
-    const nGroupCount = suffixes.filter((s) => ['amine', 'amide', 'aminium', 'imine', 'sulfonamide'].includes(s.kind)).length;
+    const items: PrefixItem[] = [];
+    for (const p of prefList) items.push({ sub: p.sub, locant: omitPrefixLoc ? '' : L(p.atom).label, value: L(p.atom).value });
+    // N-substituents: N, N', N'' following the order of the suffix groups' locants
+    const nOrder = suffixes
+      .filter((x) => x.nAtom !== undefined)
+      .sort((p, q) => L(p.atom).value - L(q.atom).value || p.nAtom! - q.nAtom!)
+      .map((x) => x.nAtom!);
     for (const x of nSubs) {
       let label = 'N';
-      if (nGroupCount > 1) {
-        // primes follow the order of the suffix locants
-        const hostLocs = suffixes.filter((s) => ['amine', 'amide', 'aminium', 'imine', 'sulfonamide'].includes(s.kind)).map((s) => L(s.atom).value).sort((p, q) => p - q);
-        const idx = hostLocs.indexOf(L(x.host).value);
-        label = 'N' + "'".repeat(Math.max(0, idx));
-      }
+      if (x.prime !== undefined) label = 'N' + "'".repeat(x.prime);
+      else if (nOrder.length > 1) label = 'N' + "'".repeat(Math.max(0, nOrder.indexOf(x.nAtom)));
       items.push({ sub: x.sub, locant: label, value: -1 });
-      suffixNs.push(x.nAtom);
     }
     let prefixText = formatPrefixes(items, locantless);
 
@@ -1084,16 +1241,17 @@ export class Namer {
       const rest = hydroPart + fullParent;
       text = prefixText + (prefixText && /^\d/.test(rest) && /[a-z)\]}]$/.test(prefixText) ? '-' : '') + rest;
     }
+    text += oxideText;
 
     // stereodescriptors for this parent
-    const stereo = this.stereoPrefix(P, L, unsatBonds.length > 0 || true);
+    const stereo = this.stereoPrefix(P, L, fv);
     if (stereo) text = stereo + text;
 
     // comparison data
     const prefixLocs = prefixes.map((p) => L(p.atom).value).sort((p, q) => p - q);
     const alpha = items.map((i) => alphaKey(i.sub.text)).sort();
     const unsatLocs = rp && rp.style === 'mancude' && !useSat ? S.filter((a) => !K.has(a)).map((a) => L(a).value).sort((p, q) => p - q) : unsatBonds.map((b) => bondLoc(N, b.a, b.b).value).sort((p, q) => p - q);
-    const esterAlkyls = esterAlk.map((e) => ({ sub: e.sub, loc: L(e.host).label }));
+    const esterAlkyls = esterAlk.map((e) => ({ sub: e.sub, loc: L(e.host).label, acyl: e.acyl }));
     const hasPrefixes = items.length > 0 || hydroPart !== '';
     return {
       text,
@@ -1106,6 +1264,7 @@ export class Namer {
       esterAlkyls,
       nSuffix,
       hasPrefixes,
+      esterKey: esterAlk.map((e) => String(e.sub.fvLoc ?? 0).padStart(3, '0') + e.sub.text).sort().join('|'),
       oxyContract: !!fv && fv.kind === 'yl' && fv.order === 1 && ((isChain && L(fv.atom).value === 1) || !!benz) && text.endsWith('yl') && text !== 'benzyl',
       phenyl: !!benz && !!fv && fv.kind === 'yl' && fv.order === 1 && items.length === 0,
       phenylLike: !!benz && !!fv && fv.kind === 'yl' && fv.order === 1 && !stereo,
@@ -1132,29 +1291,29 @@ export class Namer {
 
   // ───────────────────────── stereodescriptors ─────────────────────────
 
-  private stereoPrefix(P: Parent, L: (a: number) => Loc, _x: boolean): string {
+  /**
+   * CIP descriptors cited for one parent: its stereocentres, double bonds inside it and double bonds
+   * from it to a substituent (ylidene). The attachment bond of a substituent belongs to the parent level.
+   * No global bookkeeping: every atom belongs to exactly one parent of the final name.
+   */
+  private stereoPrefix(P: Parent, L: (a: number) => Loc, fv?: FV): string {
     if (!this.cip) return '';
     const g = this.g;
     const inP = new Set(P.atoms);
     const items: { v: number; text: string; db: boolean }[] = [];
     for (const a of P.atoms) {
       const d = this.cip.centers.get(a);
-      if (d && !this.stereoUsed.has('a' + a)) {
-        this.stereoUsed.add('a' + a);
-        items.push({ v: L(a).value, text: L(a).label + d, db: false });
-      }
+      if (d) items.push({ v: L(a).value, text: L(a).label + d, db: false });
     }
     for (const [k, d] of this.cip.bonds) {
       const [i, j] = k.split(',').map(Number);
-      if (this.stereoUsed.has('b' + k)) continue;
       const ii = inP.has(i), jj = inP.has(j);
       if (!ii && !jj) continue;
-      // double bond between a parent atom and a substituent atom is cited with the parent locant
       if (!(ii && jj)) {
         const other = ii ? j : i;
-        if (g.el[other] !== 'C' && g.el[other] !== 'N') continue;
+        if (fv && other === fv.from) continue; // cited by the parent this substituent is attached to
+        if (g.el[other] !== 'C') continue;
       }
-      this.stereoUsed.add('b' + k);
       const v = Math.min(ii ? L(i).value : Infinity, jj ? L(j).value : Infinity);
       const lab = ii && (!jj || L(i).value <= L(j).value) ? L(i).label : L(j).label;
       items.push({ v, text: lab + d, db: true });
@@ -1186,6 +1345,7 @@ export class Namer {
 
   private nameSubstituentRaw(x: number, from: number, order: number, ctx: string): SubName {
     const g = this.g;
+    if (this.gcType[x] === 'hetpart') throw new NamingError('unsupported group');
     if (this.gcType[x]) return this.nameGCSub(x, from);
     if (this.skel[x]) return this.nameSkeletalSub(x, from, order, ctx);
     return this.nameHetSub(x, from, order);
@@ -1210,6 +1370,7 @@ export class Namer {
       oxyContract: r.oxyContract,
       phenyl: r.phenyl,
       phenylLike: r.phenylLike,
+      fvLoc: r.suffixLocs[0],
     };
   }
 
@@ -1231,7 +1392,7 @@ export class Namer {
       if (!sel) throw new NamingError('cannot name acyl group');
       res = sel.res;
     }
-    return { text: res.text, compound: res.hasPrefixes, enclose: false };
+    return { text: res.text, compound: res.hasPrefixes, enclose: res.hasPrefixes };
   }
 
   /** Substituent rooted at a group carbon. */
@@ -1239,6 +1400,44 @@ export class Namer {
     const g = this.g;
     const t = this.gcType[gc]!;
     const fromIsGroupHet = !this.skel[from] && !g.inRing[from] && g.el[from] !== 'C';
+    if (t === 'guanidine') {
+      const ni = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 2)!;
+      const amino = g.nb[gc].filter((j) => g.el[j] === 'N' && g.order(gc, j) === 1);
+      if (from === ni) {
+        // =N–C(NR2)2 seen from the imino nitrogen: "diaminomethylidene"
+        const subs = amino.map((j) => this.nameSubstituent(j, gc, 1, ''));
+        return { text: this.combineSubs(subs) + 'methylidene', compound: true, enclose: true };
+      }
+      const other = amino.find((j) => j !== from)!;
+      if (g.others(other, gc).length === 0 && g.others(ni, gc).length === 0) return { text: 'carbamimidoyl', compound: false, enclose: false };
+      throw new NamingError('substituted guanidino groups not supported');
+    }
+    if (t === 'hydrazide' || t === 'thioamide' || t === 'thiourea') {
+      if (fromIsGroupHet) {
+        if (t === 'hydrazide') return this.acylName(gc, from);
+        throw new NamingError('thioacyl groups not supported');
+      }
+      const n1 = g.nb[gc].find((j) => g.el[j] === 'N' && !g.inRing[j])!;
+      const rest = g.others(n1, gc).filter((j) => !(t === 'hydrazide' && g.el[j] === 'N'));
+      if (rest.length) throw new NamingError('substituted hydrazide/thioamide prefixes not supported');
+      if (t === 'hydrazide') {
+        const n2 = g.others(n1, gc).find((j) => g.el[j] === 'N')!;
+        if (g.others(n2, n1).length) throw new NamingError('substituted hydrazide prefixes not supported');
+        return { text: 'hydrazinecarbonyl', compound: false, enclose: false };
+      }
+      return { text: 'carbamothioyl', compound: false, enclose: false };
+    }
+    if (t === 'amidine') {
+      const ni = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 2)!;
+      const na = g.nb[gc].find((j) => g.el[j] === 'N' && g.order(gc, j) === 1 && !g.inRing[j])!;
+      if (from === ni || from === na) throw new NamingError('N-substituted amidino groups not supported');
+      if (g.others(na, gc).length === 0 && g.others(ni, gc).length === 0) return { text: 'carbamimidoyl', compound: false, enclose: false };
+      const items: PrefixItem[] = [
+        ...g.others(na, gc).map((y) => ({ sub: this.nameSubstituent(y, na, g.order(na, y), ''), locant: 'N', value: 0 })),
+        ...g.others(ni, gc).map((y) => ({ sub: this.nameSubstituent(y, ni, g.order(ni, y), ''), locant: "N'", value: 1 })),
+      ];
+      return { text: formatPrefixes(items, false) + 'carbamimidoyl', compound: true, enclose: true };
+    }
     if (t === 'carbonic') {
       // from one heteroatom: name by the other one
       const other = g.nb[gc].find((j) => j !== from && g.el[j] !== 'C' && !g.inRing[j] && g.order(gc, j) === 1)!;
@@ -1280,7 +1479,7 @@ export class Namer {
   /** "methoxy", "phenoxy", "propan-2-yloxy", "(2-methylpropan-2-yl)oxy". */
   oxyName(r: SubName): string {
     if (r.oxyContract) return r.text.slice(0, -2) + 'oxy';
-    return (r.compound || startsAmbiguous(r.text) ? enclose(r.text) : r.text) + 'oxy';
+    return (/^\d/.test(r.text) || /^[A-Z]'*[,-]/.test(r.text) ? enclose(r.text) : r.text) + 'oxy';
   }
 
   /** Joins substituents of an amino/carbamoyl/silyl centre: "dimethyl", "ethyl(methyl)", "bis(2-hydroxyethyl)". */
@@ -1290,7 +1489,7 @@ export class Namer {
   }
 
   private withTail(r: SubName, tail: string): string {
-    return (r.compound || startsAmbiguous(r.text) ? enclose(r.text) : r.text) + tail;
+    return (/^\d/.test(r.text) || /^[A-Z]'*[,-]/.test(r.text) ? enclose(r.text) : r.text) + tail;
   }
 
   /** Heteroatom-rooted substituents. */
@@ -1355,7 +1554,7 @@ export class Namer {
             const r2 = g.others(y, x);
             if (r2.length === 1 && this.skel[r2[0]]) {
               const r = this.nameSubstituent(r2[0], y, 1, '');
-              return { text: this.withTail(r, 'disulfanyl'), compound: true, enclose: false };
+              return { text: this.withTail(r, 'disulfanyl'), compound: true, enclose: true };
             }
           }
         }
@@ -1388,13 +1587,11 @@ export class Namer {
     if (el === 'P') {
       const oxo = others.filter((j) => g.el[j] === 'O' && g.order(x, j) === 2 && g.degree(j) === 1);
       const rest = others.filter((j) => !oxo.includes(j));
-      if (oxo.length === 1 && rest.length === 2 && rest.every((j) => g.el[j] === 'O')) {
-        if (rest.every((j) => g.degree(j) === 1 && g.h[j] === 1)) return simple('phosphono');
-        if (rest.every((j) => g.degree(j) === 2)) {
-          const subs = rest.map((j) => this.nameSubstituent(g.others(j, x)[0], j, 1, 'oxy'));
-          const names = subs.map((s) => ({ ...s, text: this.oxyName(s), compound: s.compound }));
-          return { text: this.combineSubs(names) + 'phosphoryl', compound: true, enclose: false };
-        }
+      if (oxo.length === 1 && rest.length === 2) {
+        if (rest.every((j) => g.el[j] === 'O' && g.degree(j) === 1 && g.h[j] === 1)) return simple('phosphono');
+        // "dimethoxyphosphoryl", "diphenylphosphoryl"
+        const subs = rest.map((j) => this.nameSubstituent(j, x, g.order(x, j), ''));
+        return { text: this.combineSubs(subs) + 'phosphoryl', compound: true, enclose: false };
       }
       throw new NamingError('unsupported phosphorus substituent');
     }
@@ -1404,6 +1601,7 @@ export class Namer {
       if (!subs.length) return simple('silyl');
       return { text: this.combineSubs(subs) + 'silyl', compound: true, enclose: subs.length > 1 && new Set(subs.map((s) => s.text)).size > 1 };
     }
+    if (el === 'B' && others.length === 2 && others.every((j) => g.el[j] === 'O' && g.degree(j) === 1 && g.h[j] === 1)) return simple('borono');
     throw new NamingError('substituent element ' + el + ' not supported');
   }
 
@@ -1449,6 +1647,22 @@ export class Namer {
     }
     if (g.charge[x] !== 0) throw new NamingError('unsupported nitrogen substituent');
     if (!others.length) return simple('amino');
+    if (others.length === 1 && g.order(x, others[0]) === 2 && g.el[others[0]] === 'N' && g.charge[others[0]] === 0) {
+      // azo: –N=N–R → "R-diazenyl"
+      const y = others[0];
+      const r2 = g.others(y, x);
+      if (!r2.length) return { text: 'diazenyl', compound: false, enclose: false };
+      if (r2.length === 1 && (this.skel[r2[0]] || g.inRing[r2[0]]) && g.order(y, r2[0]) === 1) {
+        const r = this.nameSubstituent(r2[0], y, 1, '');
+        return { text: this.withTail(r, 'diazenyl'), compound: true, enclose: true };
+      }
+      throw new NamingError('unsupported azo group');
+    }
+    if (others.length === 1 && g.order(x, others[0]) === 2 && g.el[others[0]] === 'C') {
+      // N=C<: "(propan-2-ylidene)amino", "benzylideneamino", "(diaminomethylidene)amino"
+      const r = this.nameSubstituent(others[0], x, 2, '');
+      return { text: this.withTail(r, 'amino'), compound: true, enclose: true };
+    }
     if (others.some((y) => g.order(x, y) !== 1)) throw new NamingError('unsupported nitrogen substituent');
     // hydrazinyl
     if (others.some((y) => g.el[y] === 'N')) {
@@ -1481,13 +1695,16 @@ export class Namer {
   private nameCarbonic(cls: number): { name: string; locants: Map<number, string> } | null {
     const g = this.g;
     const cs: number[] = [];
-    for (let i = 0; i < g.n; i++) if (this.gcType[i] === 'carbonic' && this.carbonicClass(i) === cls) cs.push(i);
+    for (let i = 0; i < g.n; i++) {
+      if (this.gcType[i] === 'carbonic' && this.carbonicClass(i) === cls) cs.push(i);
+      if (this.gcType[i] === 'thiourea' && cls === CLS.THIOUREA) cs.push(i);
+    }
     if (!cs.length) return null;
     const c = cs[0];
     const het = g.nb[c].filter((j) => g.el[j] !== 'C' && !g.inRing[j] && g.order(c, j) === 1);
     const locants = new Map<number, string>();
     const nSubsOf = (n: number) => g.others(n, c).map((y) => this.nameSubstituent(y, n, g.order(n, y), ''));
-    if (cls === CLS.UREA) {
+    if (cls === CLS.UREA || cls === CLS.THIOUREA) {
       const [n1, n2] = het;
       const s1 = nSubsOf(n1), s2 = nSubsOf(n2);
       // lowest locants: the nitrogen with more substituents (then alphabetically first) gets 1
@@ -1504,7 +1721,7 @@ export class Namer {
         ...a.map((s) => ({ sub: s, locant: total === 1 ? '' : '1', value: 1 })),
         ...b.map((s) => ({ sub: s, locant: total === 1 ? '' : '3', value: 3 })),
       ];
-      return { name: formatPrefixes(items, false) + 'urea', locants };
+      return { name: formatPrefixes(items, total === 1) + (cls === CLS.THIOUREA ? 'thiourea' : 'urea'), locants };
     }
     const nAt = het.find((j) => g.el[j] === 'N');
     const oAts = het.filter((j) => g.el[j] === 'O');
@@ -1519,7 +1736,12 @@ export class Namer {
       if (texts.size === 1 && list.length > 1) return (list[0].compound ? multiplierComplex(list.length) + enclose(list[0].text) : multiplier(list.length) + list[0].text);
       return list.map((s) => s.text).sort((p, q) => (alphaKey(p) < alphaKey(q) ? -1 : 1)).join(' ');
     };
-    if (cls === CLS.CARBAMIC && nAt !== undefined) return { name: nPrefix(nAt) + 'carbamic acid', locants };
+    if (cls === CLS.CARBAMIC && nAt !== undefined) {
+      // PubChem style: a single substituent is cited without the N locant ("phenylcarbamic acid")
+      const subs = nSubsOf(nAt);
+      const pre = subs.length === 1 ? formatPrefixes([{ sub: subs[0], locant: '', value: 0 }], true) : nPrefix(nAt);
+      return { name: pre + 'carbamic acid', locants };
+    }
     if (cls === CLS.CARBAMATE && nAt !== undefined) return { name: alkyl(oAts[0]).text + ' ' + nPrefix(nAt) + 'carbamate', locants };
     if (cls === CLS.ANION_COO && nAt !== undefined) return { name: nPrefix(nAt) + 'carbamate', locants };
     if (cls === CLS.ACYL_HALIDE && nAt !== undefined && xAt !== undefined) return { name: nPrefix(nAt) + 'carbamoyl ' + HALIDE[g.el[xAt]], locants };
@@ -1534,6 +1756,44 @@ export class Namer {
       return { name: parts.join(' ') + ' carbonate', locants };
     }
     return null;
+  }
+
+  /** Guanidine functional parent: N1, N2 (imino), N3. */
+  private nameGuanidine(): { name: string; locants: Map<number, string> } | null {
+    const g = this.g;
+    let best: string | null = null;
+    let bestLoc = new Map<number, string>();
+    for (let c = 0; c < g.n; c++) {
+      if (this.gcType[c] !== 'guanidine') continue;
+      try {
+      const ni = g.nb[c].find((j) => g.el[j] === 'N' && g.order(c, j) === 2)!;
+      const amino = g.nb[c].filter((j) => g.el[j] === 'N' && g.order(c, j) === 1);
+      const subsOf = (n: number) => g.others(n, c).map((y) => this.nameSubstituent(y, n, g.order(n, y), ''));
+      let [a, b] = amino;
+      const sa = subsOf(a), sb = subsOf(b);
+      const firstKey = (l: SubName[]) => l.map((s) => alphaKey(s.text)).sort()[0] ?? '~';
+      let A = sa, B = sb;
+      if (sb.length > sa.length || (sb.length === sa.length && firstKey(sb) < firstKey(sa))) {
+        [a, b] = [b, a];
+        [A, B] = [B, A];
+      }
+      const items: PrefixItem[] = [
+        ...A.map((s) => ({ sub: s, locant: '1', value: 1 })),
+        ...subsOf(ni).map((s) => ({ sub: s, locant: '2', value: 2 })),
+        ...B.map((s) => ({ sub: s, locant: '3', value: 3 })),
+      ];
+      const name = formatPrefixes(items, false) + 'guanidine';
+      if (best === null || name.length < best.length || (name.length === best.length && name < best)) {
+        best = name;
+        bestLoc = new Map([[a, '1'], [ni, '2'], [b, '3'], [c, '2']]);
+        bestLoc.set(c, '');
+        bestLoc.delete(c);
+      }
+      } catch (e) {
+        if (!(e instanceof NamingError)) throw e;
+      }
+    }
+    return best === null ? null : { name: best, locants: bestLoc };
   }
 
   /** Sulfate / phosphate / nitrate esters: "dodecyl hydrogen sulfate", "trimethyl phosphate". */

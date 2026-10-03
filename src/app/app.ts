@@ -13,7 +13,7 @@ import { CommandPalette, Command } from './palette';
 import { showMenu, MenuItem } from './contextmenu';
 import { periodicTableDialog, exportDialog, shortcutsDialog, shareDialog, versionsDialog, welcomeDialog, copyImage } from './dialogs';
 import { pickFile, saveNative, resetFileHandle, docFromHash, exportDoc, safeName } from './fileio';
-import { Analysis, FragmentAnalysis, importText, chemMol, cleanAtoms, expandLabel, smilesToMol, canonicalSmiles, reactionDoc } from './chem';
+import { Analysis, FragmentAnalysis, importText, chemMol, cleanAtoms, expandLabel, smilesToMol, canonicalSmiles, reactionDoc, formats } from './chem';
 import { createDoc, docFromJSON, docToJSON, docToMol, insertMol, isDocEmpty, docBounds, cloneDoc, serializeDoc, deserializeDoc } from '../doc/document';
 import { ChemDoc, STYLE_PRESETS, DocStyle } from '../doc/types';
 import { Mol } from '../chem/mol';
@@ -698,7 +698,7 @@ export class App {
       C('export-mol', 'Export MOL file', () => exportDoc(ed.doc, 'mol'), undefined, 'File'),
       C('copy-image', 'Copy as image', () => copyImage(this), undefined, 'Edit'),
       C('copy-smiles', 'Copy SMILES', () => copyText(this.currentSmiles(), 'SMILES'), undefined, 'Edit'),
-      C('copy-mol', 'Copy MOL block', () => import('./chem').then((m) => copyText(m.formats.writeMolfile(docToMol(ed.doc, ed.analysisAtomIds()).mol), 'MOL block')), undefined, 'Edit'),
+      C('copy-mol', 'Copy MOL block', () => copyText(formats.writeMolfile(docToMol(ed.doc, ed.analysisAtomIds()).mol), 'MOL block'), undefined, 'Edit'),
       C('share', 'Share link', () => shareDialog(this), undefined, 'File'),
       C('versions', 'Version history', () => versionsDialog(this), undefined, 'File'),
       C('undo', 'Undo', () => ed.undo(), 'Ctrl Z', 'Edit'),

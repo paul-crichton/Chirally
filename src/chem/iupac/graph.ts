@@ -163,6 +163,22 @@ export function buildGraph(em: Mol): BuildGraphResult {
   if (m.bonds.some((b) => b.order !== 1 && b.order !== 2 && b.order !== 3)) {
     return { graph: null, error: 'unsupported bond order', warnings };
   }
+  // valence sanity check (radicals drawn without a radical flag, hypervalent carbon …)
+  for (let i = 0; i < m.atoms.length; i++) {
+    const a = m.atoms[i];
+    let used = a.hCount ?? 0;
+    let nO = 0;
+    for (const bi of m.adj[i]) {
+      used += m.bonds[bi].order;
+      if (m.atoms[m.other(bi, i)].el === 'O') nO++;
+    }
+    const ok =
+      a.el === 'C' ? used === 4 - Math.abs(a.charge) :
+      a.el === 'N' ? used === 3 + a.charge || (a.charge === 0 && used === 5 && nO >= 2) :
+      a.el === 'O' ? used === 2 + a.charge :
+      true;
+    if (!ok) return { graph: null, error: 'unusual valence at a ' + a.el + ' atom (radical or hypervalent atom)', warnings };
+  }
   if (m.atoms.some((a) => a.isotope)) warnings.push('isotope labels are not expressed in the name');
   const src = keep.slice();
   return { graph: new NGraph(m, src, srcBond), warnings };

@@ -6,13 +6,17 @@ import { perceiveStereo2D } from '../src/chem/stereo2d';
 import { layoutMol } from '../src/chem/layout2d';
 import { clean2D } from '../src/chem/clean2d';
 import { TEMPLATE_GROUPS, templateMol, allTemplates } from '../src/chem/templates';
+import { clearRingLayoutCache } from '../src/chem/layout/ringsys';
 
 // Geometry thresholds (bond length unit = 1):
 //  • ordinary molecules (chains, fused/spiro rings, macrocycles): every bond within 0.9–1.1;
-//  • bridged/cage ring systems (two SSSR rings sharing ≥ 3 atoms – norbornane, adamantane, cubane,
-//    morphine, strychnine, taxanes, porphyrins…): 0.6–1.45, since perspective/strained drawings
-//    cannot keep all bonds at unit length;
+//  • bridged/cage ring systems (two SSSR rings sharing ≥ 3 atoms, or rings around an atom whose
+//    polygon angles cannot tile the plane – norbornane, adamantane, cubane, morphine, strychnine,
+//    taxanes, porphyrins…): 0.6–1.45, since perspective/strained drawings cannot keep all bonds
+//    at unit length (cage templates also contain deliberate "behind" bond crossings);
 //  • no two non-bonded atoms closer than 0.4, for every molecule.
+// Stereo round trips ignore E/Z specs on double bonds inside rings < 8 (PubChem sometimes writes
+// them; they are fixed by the ring and cannot be perceived from a drawing).
 const NORMAL = [0.9, 1.1];
 const BRIDGED = [0.6, 1.45];
 const MIN_NONBONDED = 0.4;
@@ -43,6 +47,16 @@ const TRICKY: [string, string][] = [
   ['spiro[4.5]decane', 'C1CCC2(CC1)CCCC2'],
   ['allene + alkyne', 'CC=C=CC#CC'],
   ['phosphate/sulfonyl', 'CCOP(=O)(OCC)OCC.CS(=O)(=O)N(C)C'],
+  ['sirolimus', 'C[C@@H]1CC[C@H]2C[C@@H](/C(=C/C=C/C=C/[C@H](C[C@H](C(=O)[C@@H]([C@@H](/C(=C/[C@H](C(=O)C[C@H](OC(=O)[C@@H]3CCCCN3C(=O)C(=O)[C@@]1(O2)O)[C@H](C)C[C@@H]4CC[C@H]([C@@H](C4)OC)O)C)/C)O)OC)C)C)/C)OC'],
+  ['amphotericin B', 'C[C@H]1/C=C/C=C/C=C/C=C/C=C/C=C/C=C/[C@@H](C[C@H]2[C@@H]([C@H](C[C@](O2)(C[C@H](C[C@H]([C@@H](CC[C@H](C[C@H](CC(=O)O[C@H]([C@@H]([C@@H]1O)C)C)O)O)O)O)O)O)O)C(=O)O)O[C@H]3[C@H]([C@H]([C@@H]([C@H](O3)C)O)N)O'],
+  ['tacrolimus', 'C[C@@H]1C[C@@H]([C@@H]2[C@H](C[C@H]([C@@](O2)(C(=O)C(=O)N3CCCC[C@H]3C(=O)O[C@@H]([C@@H]([C@H](CC(=O)[C@@H](/C=C(/C1)\\C)CC=C)O)C)/C(=C/[C@@H]4CC[C@H]([C@@H](C4)OC)O)/C)O)C)OC)OC'],
+  ['caryophyllene', 'C/C/1=C\\CCC(=C)[C@H]2CC([C@@H]2CC1)(C)C'],
+  ['chlorophyll a', 'CCC\\1=C(C\\2=[NH+]/C1=C\\C3=C(C4=C([C@@H](C(=C4[N-]3)C5=[NH+]C(=C([C@@H]5CCC(=O)OC/C=C(\\C)/CCC[C@H](C)CCC[C@H](C)CCCC(C)C)C)/C=C\\6/C(=C(/C(=C2)/[N-]6)C=C)C)C(=O)OC)O)C)C.[Mg+2]'],
+  ['vitamin B12', 'CC1=CC2=C(C=C1C)N(C=N2)[C@@H]3C([C@@H]([C@H](O3)CO)OP(=O)([O-])O[C@H](C)CNC(=O)CC[C@@]\\4([C@H]([C@@H]5[C@]6([C@@]([C@@H](C(=N6)/C(=C\\7/[C@@]([C@@H](C(=N7)/C=C\\8/C([C@@H](C(=N8)/C(=C4\\[N-]5)/C)CCC(=O)N)(C)C)CCC(=O)N)(C)CC(=O)N)/C)CCC(=O)N)(C)CC(=O)N)C)CC(=O)N)C)O.[C-]#N.[Co+3]'],
+  ['vinblastine', 'CC[C@@]1(C[C@H]2C[C@@](C3=C(CCN(C2)C1)C4=CC=CC=C4N3)(C5=C(C=C6C(=C5)[C@]78CCN9[C@H]7[C@@](C=CC9)([C@H]([C@@]([C@@H]8N6C)(C(=O)OC)O)OC(=O)C)CC)OC)C(=O)OC)O'],
+  ['patchoulol', 'C[C@H]1CC[C@@]2([C@@]3([C@H]1C[C@H](C2(C)C)CC3)C)O'],
+  ['longifolene', 'C[C@]12CCCC([C@@H]3[C@H]1CC[C@@H]3C2=C)(C)C'],
+  ['santalol', 'C/C(=C\\CCC1(C2CCC(C2)C1=C)C)/CO'],
 ];
 
 interface Geo { minBond: number; maxBond: number; minNB: number }
@@ -111,8 +125,18 @@ function checkLayout(name: string, smiles: string, m: Mol): void {
   void smiles;
 }
 
+/** Drops E/Z specs of double bonds in rings < 8: they are fixed by the ring and not drawable. */
+function drawableStereo(m: Mol): Mol {
+  const info = perceiveRings(m);
+  m.dbStereo = m.dbStereo.filter((d) => {
+    const sizes = info.bondRings[d.bond].map((r) => info.rings[r].length);
+    return !sizes.length || Math.min(...sizes) >= 8;
+  });
+  return m;
+}
+
 function stereoRoundTrip(name: string, smiles: string): void {
-  const m = parseSmiles(smiles);
+  const m = drawableStereo(parseSmiles(smiles));
   const ref = writeSmiles(m);
   const centres = new Set(m.tetra.map((t) => t.center));
   const dbBonds = new Set(m.dbStereo.map((d) => d.bond));
@@ -195,6 +219,7 @@ describe('layoutMol: geometry conventions', () => {
     layoutMol(m);
     expect(angleAt(m, 0, 1, 2)).toBeCloseTo(180, 3);
     expect(angleAt(m, 1, 2, 3)).toBeCloseTo(180, 3);
+    for (const a of m.atoms) expect(a.y).toBeCloseTo(m.atoms[0].y, 6); // drawn horizontally
     const a = parseSmiles('CC=C=C=CC');
     layoutMol(a);
     for (const i of [2, 3]) expect(angleAt(a, i - 1, i, i + 1)).toBeCloseTo(180, 3);
@@ -242,6 +267,17 @@ describe('layoutMol: geometry conventions', () => {
     expect(a.atoms.map((p) => [p.x, p.y])).toEqual(b.atoms.map((p) => [p.x, p.y]));
   });
 
+  it('cached ring-system layouts are identical to fresh ones', () => {
+    for (const s of [TRICKY[1][1], TRICKY[2][1], 'C1CC2CCC1C2', 'C1CCCCC/C=C/CCCC1']) {
+      clearRingLayoutCache();
+      const a = parseSmiles(s);
+      layoutMol(a); // computes and caches
+      const b = parseSmiles(s);
+      layoutMol(b); // cache hit
+      expect(b.atoms.map((p) => [p.x, p.y])).toEqual(a.atoms.map((p) => [p.x, p.y]));
+    }
+  });
+
   it('places explicit hydrogens like other substituents', () => {
     const m = parseSmiles('[H]C([H])([H])C([H])([H])O[H]');
     layoutMol(m);
@@ -269,6 +305,19 @@ describe('layoutMol: geometry conventions', () => {
     const d = Math.hypot(salt.atoms[o].x - salt.atoms[na].x, salt.atoms[o].y - salt.atoms[na].y);
     expect(d).toBeLessThan(2);
     expect(geometry(salt).minNB).toBeGreaterThan(1.2);
+  });
+
+  it('keeps stereo that is only drawn (wedges, double-bond geometry) through a re-layout', () => {
+    // Z double bond: a plain re-layout would draw the default trans zig-zag
+    const smiles = 'C/C=C\\C[C@H](O)CC';
+    const m = parseSmiles(smiles);
+    const ref = writeSmiles(m);
+    layoutMol(m);
+    m.tetra = [];
+    m.dbStereo = [];
+    layoutMol(m);
+    expect(m.tetra.length).toBe(0); // stored specs untouched
+    expect(drawnSmiles(m, new Set([4]), new Set([1]))).toBe(ref);
   });
 
   it('draws wedges that reproduce every stereocentre', () => {
