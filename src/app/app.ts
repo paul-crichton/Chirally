@@ -213,6 +213,9 @@ export class App {
     ed.on('status', () => (this.statusEl.textContent = ed.status));
     ed.on('tool', () => this.updateSelBar());
     ed.contextMenuHandler = (sx, sy, hit) => this.contextMenu(sx, sy, hit);
+    ed.emptyHint = ed.isTouchDevice
+      ? ['Tap to draw a bond', 'Pinch to zoom · long-press for options', 'Search PubChem with the 🔍 button']
+      : ['Click to draw a bond — drag to set its angle', 'Hover an atom and type O, N, Cl… to change it', 'Ctrl+K: search PubChem or paste a SMILES · drop a file to open it'];
     this.palette = new CommandPalette(this, () => this.commands());
     this.showTab(this.prefs.tab ?? 'analysis');
     if (this.prefs.sidebar === false || window.innerWidth < 760) this.root.classList.add('sidebar-hidden');
@@ -227,7 +230,7 @@ export class App {
       t.btn.setAttribute('aria-selected', String(on));
       t.panel.hidden = !on;
     }
-    if (ensureOpen) this.root.classList.remove('sidebar-hidden');
+    if (ensureOpen && this.root.classList.contains('sidebar-hidden')) this.toggleSidebar();
     if (id === '3d') this.viewerPanel.activate();
     if (id === 'library') this.libraryPanel.activate();
     if (id === 'mechanism') this.mechanismPanel.update();
@@ -239,8 +242,16 @@ export class App {
 
   toggleSidebar(): void {
     this.root.classList.toggle('sidebar-hidden');
-    this.prefs.sidebar = !this.root.classList.contains('sidebar-hidden');
+    const open = !this.root.classList.contains('sidebar-hidden');
+    this.prefs.sidebar = open;
     this.persistPrefs();
+    if (open) this.scheduleAnalysis();
+    // on phones the panel is a bottom sheet: keep the drawing visible above it
+    if (window.innerWidth < 760) {
+      const sheet = this.sidebar.getBoundingClientRect().height || window.innerHeight * 0.62;
+      this.editor.view.oy += (open ? -1 : 1) * sheet * 0.45;
+      this.editor.requestRender();
+    }
     setTimeout(() => this.editor.requestRender(), 250);
   }
 
@@ -418,9 +429,9 @@ export class App {
   // ───────────── insertion / import ─────────────
 
   /** Inserts structures from any supported text (SMILES, MOL, SDF, CDXML, …). */
-  insertFromText(text: string, fileName: string | null, name?: string): void {
+  insertFromText(text: string, fileName: string | null, name?: string, opts: { suppressH?: boolean } = {}): void {
     try {
-      const r = importText(text, fileName);
+      const r = importText(text, fileName, opts);
       if (r.kind === 'chemwrite') {
         this.mergeDoc(docFromJSON(text));
         return;
@@ -432,15 +443,25 @@ export class App {
       }
       const mols = r.mols ?? [];
       if (!mols.length) throw new Error('No structures found');
-      // lay several molecules out in a row
+      // lay several molecules out in rows (grid) so large imports stay readable
       const combined = new Mol();
-      let x = 0;
-      for (const m of mols) {
-        const bb = m.bbox();
-        m.translate(x - bb.minX, -(bb.minY + bb.maxY) / 2);
-        x += bb.maxX - bb.minX + 1.8;
+      const boxes = mols.map((m) => m.bbox());
+      const area = boxes.reduce((s, b) => s + (b.maxX - b.minX + 2) * (b.maxY - b.minY + 2), 0);
+      const rowWidth = Math.max(14, Math.sqrt(area) * 1.6);
+      let x = 0, y = 0, rowH = 0;
+      mols.forEach((m, i) => {
+        const bb = boxes[i];
+        const w = bb.maxX - bb.minX, hgt = bb.maxY - bb.minY;
+        if (x > 0 && x + w > rowWidth) {
+          x = 0;
+          y += rowH + 2.2;
+          rowH = 0;
+        }
+        m.translate(x - bb.minX, y - bb.minY);
+        x += w + 2;
+        rowH = Math.max(rowH, hgt);
         combined.append(m);
-      }
+      });
       this.editor.insertMolecule(combined, undefined, name ? `Insert ${name}` : 'Insert structure');
       this.ensureVisible();
       if (name && isDocEmptyExcept(this.editor.doc, combined.atoms.length) && this.editor.doc.meta.title === 'Untitled') {

@@ -3,7 +3,7 @@ import { Mol } from '../chem/mol';
 import { parseSmiles, writeSmiles, suppressHydrogens, parseReactionSmiles } from '../chem/smiles';
 import { layoutMol } from '../chem/layout2d';
 import { clean2D } from '../chem/clean2d';
-import { perceiveStereo2D } from '../chem/stereo2d';
+import { perceiveStereo2D, assignWedgesFromSpecs } from '../chem/stereo2d';
 import { expandAbbreviations, abbreviationMol } from '../chem/abbreviations';
 import { computeFormula, FormulaInfo } from '../chem/formula';
 import { computeProperties, MolProperties } from '../chem/properties';
@@ -232,7 +232,24 @@ export interface ImportResult {
 }
 
 /** Converts arbitrary chemical text (or file contents) to molecules or a document. */
-export function importText(text: string, fileName: string | null = null): ImportResult {
+export function importText(text: string, fileName: string | null = null, opts: { suppressH?: boolean } = {}): ImportResult {
+  const r = importTextRaw(text, fileName);
+  if (opts.suppressH && r.mols) r.mols = r.mols.map(stripHydrogens);
+  return r;
+}
+
+/** Removes ordinary explicit hydrogens (as found in PubChem SDF files) while keeping stereo wedges. */
+export function stripHydrogens(m: Mol): Mol {
+  if (!m.atoms.some((a) => a.el === 'H')) return m;
+  if (!m.tetra.length && !m.dbStereo.length) perceiveStereo2D(m);
+  const s = suppressHydrogens(m);
+  if (s.tetra.length) assignWedgesFromSpecs(s);
+  s.name = m.name;
+  s.props = m.props;
+  return s;
+}
+
+function importTextRaw(text: string, fileName: string | null): ImportResult {
   const fmt = F.detectFormat(fileName, text);
   switch (fmt) {
     case 'chemwrite':

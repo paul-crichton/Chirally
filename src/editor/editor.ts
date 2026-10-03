@@ -388,6 +388,23 @@ export class Editor {
     drawPrims(ctx, scene.prims, this.view);
     this.tool.overlay?.(ctx);
     this.drawSelectionBox(ctx);
+    if (this.emptyHint && !this.doc.atoms.size && !this.doc.arrows.size && !this.doc.texts.size && !this.doc.shapes.size) this.drawEmptyHint(ctx, W, H);
+  }
+
+  /** Lines shown in the middle of an empty canvas (set by the app). */
+  emptyHint: string[] | null = null;
+
+  private drawEmptyHint(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+    const lines = this.emptyHint!;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = this.theme.dark ? 'rgba(230,230,230,0.38)' : 'rgba(30,35,40,0.36)';
+    const size = W < 500 ? 13 : 15;
+    lines.forEach((l, i) => {
+      ctx.font = `${i === 0 ? '600 ' : ''}${i === 0 ? size + 3 : size}px system-ui, -apple-system, sans-serif`;
+      ctx.fillText(l, W / 2, H / 2 - ((lines.length - 1) * 26) / 2 + i * 26);
+    });
+    ctx.restore();
   }
 
   private drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number): void {

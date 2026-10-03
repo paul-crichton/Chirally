@@ -55,35 +55,48 @@ function bondCode(order: number): number {
 }
 
 function refine(mol: Mol, ranks: number[]): number[] {
+  const n = ranks.length;
+  // neighbour lists (atom index, bond code) computed once
+  const nbr: number[][] = new Array(n);
+  const code: number[][] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const adj = mol.adj[i];
+    nbr[i] = adj.map((bi) => mol.other(bi, i));
+    code[i] = adj.map((bi) => bondCode(mol.bonds[bi].order));
+  }
+  const keys: Float64Array[] = new Array(n);
+  const idx = new Array(n);
   let classes = new Set(ranks).size;
-  for (let iter = 0; iter < mol.atoms.length + 2; iter++) {
-    const keys = ranks.map((r, i) => {
-      const nb = mol.adj[i]
-        .map((bi) => ranks[mol.other(bi, i)] * 8 + bondCode(mol.bonds[bi].order))
-        .sort((p, q) => p - q);
-      return r * 1e6 + 0 + '|' + nb.join(',');
-    });
-    // sort by (old rank, neighbour list)
-    const idx = ranks.map((_, i) => i);
-    idx.sort((p, q) => {
-      if (ranks[p] !== ranks[q]) return ranks[p] - ranks[q];
-      return keys[p] < keys[q] ? -1 : keys[p] > keys[q] ? 1 : 0;
-    });
-    const next = new Array(ranks.length).fill(0);
+  const cmp = (p: number, q: number): number => {
+    if (ranks[p] !== ranks[q]) return ranks[p] - ranks[q];
+    const a = keys[p], b = keys[q];
+    if (a.length !== b.length) return a.length - b.length;
+    for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] - b[k];
+    return 0;
+  };
+  for (let iter = 0; iter < n + 2; iter++) {
+    for (let i = 0; i < n; i++) {
+      const ni = nbr[i], ci = code[i];
+      const kv = new Float64Array(ni.length);
+      for (let k = 0; k < ni.length; k++) kv[k] = ranks[ni[k]] * 8 + ci[k];
+      kv.sort();
+      keys[i] = kv;
+      idx[i] = i;
+    }
+    idx.sort(cmp);
+    const next = new Array(n).fill(0);
     let r = 0;
-    for (let k = 0; k < idx.length; k++) {
-      if (k > 0) {
-        const p = idx[k - 1], q = idx[k];
-        if (ranks[p] !== ranks[q] || keys[p] !== keys[q]) r = k;
-      }
+    for (let k = 0; k < n; k++) {
+      if (k > 0 && cmp(idx[k - 1], idx[k]) !== 0) r = k;
       next[idx[k]] = r;
     }
-    const nc = new Set(next).size;
+    let nc = 0;
+    for (let k = 0; k < n; k++) if (k === 0 || next[idx[k]] !== next[idx[k - 1]]) nc++;
     ranks = next;
     if (nc === classes) break;
     classes = nc;
   }
-  return rankNumbers(ranks);
+  return ranks;
 }
 
 function rankStrings(v: string[]): number[] {

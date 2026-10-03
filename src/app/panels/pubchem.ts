@@ -120,7 +120,7 @@ export class PubChemPanel {
   async insert(c: PC.CompoundSummary): Promise<void> {
     try {
       const sdf = await PC.sdf2d(c.cid);
-      this.app.insertFromText(sdf, `${c.title ?? 'CID' + c.cid}.sdf`, c.title ?? undefined);
+      this.app.insertFromText(sdf, `${c.title ?? 'CID' + c.cid}.sdf`, c.title ?? undefined, { suppressH: true });
       toast(`Inserted ${c.title ?? 'CID ' + c.cid}`, 'success');
     } catch (e) {
       // fall back to SMILES

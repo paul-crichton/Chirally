@@ -121,7 +121,7 @@ export function primsToSVG(prims: Prim[], bounds: Box, unit: number, opts: { pad
   const Y = (y: number) => f((y - y0) * unit);
   const S = (v: number) => f(v * unit);
   const out: string[] = [];
-  out.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${f(Wm * unit)}pt" height="${f(Hm * unit)}pt" viewBox="0 0 ${f(Wm * unit)} ${f(Hm * unit)}">`);
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="${f(Wm * unit)}pt" height="${f(Hm * unit)}pt" viewBox="0 0 ${f(Wm * unit)} ${f(Hm * unit)}">`);
   if (opts.title) out.push(`<title>${esc(opts.title)}</title>`);
   if (opts.background) out.push(`<rect width="100%" height="100%" fill="${opts.background}"/>`);
   const dashAttr = (d?: number[]) => (d ? ` stroke-dasharray="${d.map((v) => S(v)).join(' ')}"` : '');
@@ -157,7 +157,7 @@ export function primsToSVG(prims: Prim[], bounds: Box, unit: number, opts: { pad
         out.push(`<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="${S(p.r)}" fill="${p.fill ?? 'none'}"${p.stroke ? ` stroke="${p.stroke}" stroke-width="${S(p.w ?? 0.05)}"` : ''}${dashAttr(p.dash)}/>`);
         break;
       case 'text':
-        out.push(`<text x="${X(p.x)}" y="${Y(p.y)}" font-family="${esc(p.family)}" font-size="${S(p.size)}" fill="${p.color}"${p.bold ? ' font-weight="bold"' : ''}${p.italic ? ' font-style="italic"' : ''}>${esc(p.text)}</text>`);
+        out.push(`<text x="${X(p.x)}" y="${Y(p.y)}" style="white-space:pre" font-family="${esc(p.family)}" font-size="${S(p.size)}" fill="${p.color}"${p.bold ? ' font-weight="bold"' : ''}${p.italic ? ' font-style="italic"' : ''}>${esc(p.text)}</text>`);
         break;
     }
   }

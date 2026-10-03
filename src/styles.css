@@ -737,7 +737,7 @@ details.sub[open] > summary::before {
   padding: 24px 12px;
   color: var(--muted);
 }
-.empty-state svg {
+.empty-state > svg {
   width: 44px;
   height: 44px;
   color: var(--accent);
@@ -1102,6 +1102,9 @@ details.sub[open] > summary::before {
   display: grid;
   grid-template-columns: 240px 1fr;
   gap: 16px;
+}
+.export-dlg .check {
+  display: flex;
 }
 .fmt-list {
   display: flex;
