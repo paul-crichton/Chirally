@@ -1,0 +1,10 @@
+{
+  "name": "ChemWrite",
+  "short_name": "ChemWrite",
+  "description": "Chemical structure & mechanism editor",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1971c2",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
