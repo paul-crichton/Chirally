@@ -3,7 +3,7 @@
 A ChemDraw / ChemSketch-style chemical structure and reaction-mechanism editor that runs entirely in the browser.
 It's designed mainly for mouse and keyboard, and also works with touch on tablets and phones.
 
-![ChemWrite](docs/screenshot.png)
+![ChemWrite: reaction scheme, SN2 mechanism and live analysis of the selected product](docs/screenshot.png)
 
 ## Highlights
 
@@ -21,11 +21,20 @@ It's designed mainly for mouse and keyboard, and also works with touch on tablet
 - **Geometry optimisation**
   - *Clean Structure* (Ctrl+Shift+K) tidies bond lengths, angles and rings while keeping the drawing's orientation and its stereochemistry.
   - In-browser **3D models**: distance-geometry embedding, then UFF force-field minimisation (L-BFGS), conformer search, an interactive viewer (rotate, zoom, measure distances/angles/dihedrals), and export to XYZ, 3D MOL or PNG.
-- **IUPAC names**, generated locally as you draw: chains, rings, about 50 heterocycle and fused-ring templates, von Baeyer and spiro systems, functional-group seniority, esters, amides, salts, and R/S and E/Z descriptors. If a structure can't be named locally, it can fall back to looking up the name in PubChem.
+- **IUPAC names**, generated locally as you draw (IUPAC 2013 rules, PubChem-compatible style where valid):
+  - chains, rings, about 80 fused and bridged ring systems with fixed numbering, Hantzsch–Widman heterocycles, von Baeyer and spiro systems;
+  - functional-group seniority, esters, amides, salts, hydro prefixes and indicated hydrogen;
+  - R/S and E/Z descriptors.
+
+  It matches PubChem's name exactly for 647 of about 700 test compounds; most of the rest differ on purpose to follow current IUPAC rules. If a structure can't be named locally, you can look its name up in PubChem.
 - Formula, average and exact mass, m/z, elemental analysis, degrees of unsaturation, canonical SMILES with stereo, live CIP (R/S, E/Z) labels, and valence-error flags.
-- Properties: Wildman–Crippen cLogP, TPSA, H-bond donors/acceptors, rotatable bonds, Fsp³, ESOL solubility, molar refractivity, Lipinski and Veber checks, and functional-group detection that highlights the atoms on the canvas.
+- Properties: Wildman–Crippen cLogP, TPSA, H-bond donors/acceptors, rotatable bonds, Fsp³, ESOL solubility, molar refractivity, Lipinski and Veber checks, and functional-group detection that highlights the atoms on the canvas. These agree with RDKit to within ±0.002 on 218 of 221 test molecules. The R/S labeller agrees with RDKit's new CIP labeller on 522 test molecules, including pseudoasymmetric r/s centres.
+- **Template library** of 171 structures: rings, heterocycles, amino acids, sugars and nucleosides, nucleobases, functional groups, steroids and terpenes, and 61 **cosmetic actives and excipients** (niacinamide, retinoids, AHAs, UV filters, surfactants, emollients…). You can also save your own templates.
 
 **Mechanisms & reactions**
+
+![Drawing curved arrows and generating the cyanohydrin alkoxide](docs/mechanism.png)
+
 - Electron-pushing arrows: full-headed (electron pair) and fishhook (single electron), anchored to atoms, bonds or the space between two atoms, with draggable curvature.
 - **Arrow-pushing simulator**: *Apply arrows → next intermediate* does the electron bookkeeping (lone pairs, bonds, formal charges, radicals). It draws the product with a reaction or resonance arrow and warns about octet violations or arrows that don't make sense.
 - Reaction mass balance and atom economy for drawn schemes. Exports reaction SMILES and RXN files.
@@ -79,8 +88,8 @@ On touch screens: tap to draw, drag to draw at an angle, pinch to zoom, two fing
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # unit tests (Vitest)
-npm run e2e        # browser tests (Playwright, Chromium)
+npm test           # unit tests (Vitest, 1,134 tests)
+npm run e2e        # browser tests (Playwright: desktop and phone layouts)
 npm run build      # static production build in dist/
 ```
 

@@ -763,6 +763,12 @@ table('reagents and solvents', [
   ['CC1CCC(CC1)C(C)(C)O', '2-(4-methylcyclohexyl)propan-2-ol'],
   ['ClCC(=O)Nc1ccccc1C(=O)O', '2-[(2-chloroacetyl)amino]benzoic acid'],
   ['ClCC(=O)c1ccc(cc1)C(=O)O', '4-(2-chloroacetyl)benzoic acid'],
+  ['Cc1ccc(cc1)S(=O)(=O)N1CCCCC1', '1-(4-methylphenyl)sulfonylpiperidine'],
+  ['Cc1ccc(cc1)S(=O)(=O)c1ccc(C)cc1', '1-methyl-4-(4-methylphenyl)sulfonylbenzene'],
+  ['CC(C)(C)OC(=O)N1CCC(O)CC1', 'tert-butyl 4-hydroxypiperidine-1-carboxylate'],
+  ['Clc1ccc(Sc2ccc(Cl)cc2)cc1', '1-chloro-4-(4-chlorophenyl)sulfanylbenzene'],
+  ['COc1ccc(cc1)S(=O)(=O)c1ccc(cc1)C(=O)O', '4-(4-methoxyphenyl)sulfonylbenzoic acid'],
+  ['CC(C)(C)OCc1ccc(cc1)C(=O)O', '4-[(2-methylpropan-2-yl)oxymethyl]benzoic acid'],
 ]);
 
 table('salts and multi-component inputs', [

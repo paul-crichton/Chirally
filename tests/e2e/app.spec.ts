@@ -26,7 +26,7 @@ test('draws a bond with a click and changes an atom with a hotkey', async ({ pag
   await page.mouse.move(a2.x, a2.y);
   await page.keyboard.press('o');
   expect(await smiles(page)).toBe('CCO');
-  await expect(page.locator('.iupac')).toHaveText('propan-1-ol');
+  await expect(page.locator('.iupac')).toHaveText('ethanol');
   await page.keyboard.press('Control+z');
   expect(await smiles(page)).toBe('CCC');
   await page.keyboard.press('Control+Shift+z');

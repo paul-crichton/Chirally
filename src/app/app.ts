@@ -317,7 +317,8 @@ export class App {
     const stage = this.selBar.parentElement!;
     const bw = this.selBar.offsetWidth || 300;
     let x = (box!.x1 + box!.x2) / 2 - bw / 2;
-    let y = box!.y1 - 54;
+    // keep clear of the rotate handle drawn just above the selection box
+    let y = box!.y1 - (ed.rotateHandle() ? 82 : 54);
     if (y < 6) y = box!.y2 + 10;
     x = Math.max(6, Math.min(x, stage.clientWidth - bw - 6));
     y = Math.max(6, Math.min(y, stage.clientHeight - 50));

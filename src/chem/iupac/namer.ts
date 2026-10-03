@@ -726,9 +726,6 @@ export class Namer {
         }
       }
     }
-    if (startAt >= 0 && this.gcType[startAt]) {
-      // acyl chain starting at a group carbon is handled by the caller
-    }
     for (let i = 0; i < ends.length; i++) {
       for (let j = i; j < ends.length; j++) {
         const e1 = ends[i], e2 = ends[j];
@@ -919,7 +916,6 @@ export class Namer {
         consumed.add(g.terminalDouble(fv.carbonylC!, 'O'));
       }
     }
-    const attachedSuffix = new Set<number>(); // hosts of attached group-carbon suffixes (for -carboxylic acid)
     for (const s of P.atoms) {
       // group carbon inside a chain
       if (this.gcType[s] && P.kind === 'chain') {
@@ -935,7 +931,6 @@ export class Namer {
           const gi = this.attachedGroup(s, x);
           if (gi && gi.cls === cls && !(P.kind === 'chain' && opts.inclMode && gi.gc >= 0)) {
             takeGroup(s, gi, false);
-            if (gi.gc >= 0) attachedSuffix.add(s);
             continue;
           }
         }
@@ -980,7 +975,7 @@ export class Namer {
       return { label: lo.label + '(' + hi.label + ')', value: lo.value + 0.001 };
     };
     // forced (implied) saturated positions for the hydro display
-    const hEff = (a: number) => g.h[a];
+    const hEff = (a: number) => g.h[a]; // hydrogens (a free valence or substituent replaces one)
     const forced = new Set<number>();
     if (S.length) {
       for (const a of S) if (K.has(a) || (hEff(a) === 0)) forced.add(a);
