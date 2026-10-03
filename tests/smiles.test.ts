@@ -27,6 +27,17 @@ describe('SMILES parsing', () => {
       expect(m.bonds.some((b) => b.order === 1.5), s).toBe(false);
     }
   });
+  it('gives aromatic S/O no implicit hydrogens', () => {
+    expect(computeFormula(parseSmiles('c1ccsc1')).formula).toBe('C4H4S');
+    expect(computeFormula(parseSmiles('c1ccoc1')).formula).toBe('C4H4O');
+    expect(writeSmiles(parseSmiles('C1=CSC=C1'))).toBe('c1ccsc1');
+    expect(writeSmiles(parseSmiles('c1ccsc1'))).toBe('c1ccsc1');
+  });
+  it('kekulizes mixed-case aromatic SMILES', () => {
+    const m = parseSmiles('CC1=C(C)c2ccccc2C1=O');
+    expect(m.bonds.some((b) => b.order === 1.5)).toBe(false);
+    expect(computeFormula(m).formula).toBe('C11H10O');
+  });
   it('tolerates pyrrole written without explicit [nH]', () => {
     const m = parseSmiles('c1ccnc1');
     expect(m.bonds.some((b) => b.order === 1.5)).toBe(false);

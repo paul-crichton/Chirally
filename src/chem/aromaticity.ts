@@ -138,7 +138,7 @@ export function kekulize(mol: Mol, aromaticAtoms: boolean[], aromaticBonds: bool
     let v = vals.find((x) => x >= used) ?? vals[vals.length - 1] ?? 0;
     // A pi bond is required if one more bond fits the smallest adequate valence
     // (pyridine N: 3 - 2 = 1 → needs; pyrrole [nH]: 3 - 3 = 0 → no)
-    if (aroCount >= 2 && v - used >= 1) {
+    if (aroCount >= 1 && v - used >= 1) {
       // For atoms like S that allow valence 4, prefer the lowest valence (no double bond) when used == 2
       if ((a.el === 'S' || a.el === 'Se' || a.el === 'O' || a.el === 'Te') && used >= 2) need[i] = false;
       else need[i] = true;

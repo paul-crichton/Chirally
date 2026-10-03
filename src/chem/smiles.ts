@@ -201,10 +201,15 @@ export function parseSmiles(input: string): Mol {
     }
     let sum = 0;
     for (const bi of mol.adj[a]) sum += aromaticBond[bi] ? 1 : mol.bonds[bi].order;
-    if (aromaticAtom[a]) sum += 1;
     const vals = chargedValences(mol.atoms[a].el, 0);
-    const v = vals.find((x) => x >= sum);
-    mol.atoms[a].hCount = v === undefined ? 0 : v - sum;
+    if (aromaticAtom[a]) {
+      // aromatic atoms use their lowest valence only (c → 1 H, n/o/s → 0 H): one extra bond for the π system
+      const v = vals[0] ?? 0;
+      mol.atoms[a].hCount = Math.max(0, v - sum - 1);
+    } else {
+      const v = vals.find((x) => x >= sum);
+      mol.atoms[a].hCount = v === undefined ? 0 : v - sum;
+    }
   }
 
   if (aromaticBond.some((x) => x)) {
@@ -482,8 +487,8 @@ function defaultSmilesH(mol: Mol, v: number, aromatic: boolean, aroBonds: boolea
     // aromatic bonds are implicit and count 1 each; the π bond adds one more below
     sum += aromatic && (aroBonds[bi] || b.order === 1.5) ? 1 : b.order;
   }
-  if (aromatic) sum += 1;
   const vals = chargedValences(a.el, 0);
+  if (aromatic) return Math.max(0, Math.round((vals[0] ?? 0) - sum - 1));
   const val = vals.find((x) => x >= sum - 1e-6);
   return val === undefined ? 0 : Math.round(val - sum);
 }
