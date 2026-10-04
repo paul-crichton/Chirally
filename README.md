@@ -99,7 +99,9 @@ There are no runtime dependencies: the chemistry engine, renderer, file formats,
 
 ### Hosting
 
-`npm run build` produces a static site in `dist/` with no server-side code; serve it with any web server (nginx, Caddy, a Proxmox LXC, GitHub Pages…), at the site root or under a sub-path. PubChem lookups are made by the visitor's browser, so the server itself needs no internet access. Serve it over HTTPS (or open it on `localhost`) to get offline use, installing it as an app, copying images to the system clipboard and the browser's native Save dialog; over plain HTTP everything else works, and Save downloads the file instead.
+`npm run build` produces a static site in `dist/` with no server-side code. Serve it with any static web server (for example nginx or Caddy, perhaps in a Proxmox LXC container, or GitHub Pages), at the site root or under a sub-path. PubChem lookups are made by the visitor's browser, so the server itself needs no internet access.
+
+Some browser features only work over HTTPS (or on `localhost`): offline use, installing it as an app, the Copy/Cut/Paste commands in the Edit menu, right-click menu and selection toolbar, Copy as image, and (in Chrome and Edge) the native Save dialog. Over plain HTTP everything else works: Ctrl+C / Ctrl+X / Ctrl+V still use the system clipboard, the menu and toolbar Copy/Paste only work within the same Chirally tab, and Save downloads the file instead.
 
 ### Architecture
 
