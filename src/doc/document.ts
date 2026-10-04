@@ -1,10 +1,10 @@
 import { Mol, TetraSpec } from '../chem/mol';
 import { ChemDoc, DocAtom, DocBond, STYLE_PRESETS, DocStyle, ArrowObj, CurvedArrowObj, TextObj, ShapeObj } from './types';
 
-export const FILE_FORMAT = 'chemwrite';
+export const FILE_FORMAT = 'chirally';
 export const FILE_VERSION = 1;
 
-export function createDoc(style: DocStyle = STYLE_PRESETS.ChemWrite): ChemDoc {
+export function createDoc(style: DocStyle = STYLE_PRESETS.Chirally): ChemDoc {
   return {
     version: 1,
     atoms: new Map(),
@@ -201,7 +201,7 @@ export function isDocEmpty(doc: ChemDoc): boolean {
   return !doc.atoms.size && !doc.arrows.size && !doc.texts.size && !doc.shapes.size && !doc.curved.size;
 }
 
-// ───────────── serialization (native .cwj JSON) ─────────────
+// ───────────── serialization (native .chirally JSON) ─────────────
 
 export interface SerializedDoc {
   format: typeof FILE_FORMAT;
@@ -235,8 +235,8 @@ export function serializeDoc(doc: ChemDoc): SerializedDoc {
 
 export function deserializeDoc(data: unknown): ChemDoc {
   const d = data as Partial<SerializedDoc>;
-  if (!d || d.format !== FILE_FORMAT) throw new Error('Not a ChemWrite document');
-  const doc = createDoc({ ...STYLE_PRESETS.ChemWrite, ...(d.style ?? {}) });
+  if (!d || d.format !== FILE_FORMAT) throw new Error('Not a Chirally document');
+  const doc = createDoc({ ...STYLE_PRESETS.Chirally, ...(d.style ?? {}) });
   doc.meta = { title: 'Untitled', ...(d.meta ?? {}) };
   let maxId = 0;
   const put = <T extends { id: number }>(m: Map<number, T>, list?: T[]) => {

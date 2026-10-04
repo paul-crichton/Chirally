@@ -27,10 +27,10 @@ import * as PC from '../services/pubchem';
 import { layoutMol } from '../chem/layout2d';
 import { parseSmiles } from '../chem/smiles';
 
-const AUTOSAVE_KEY = 'chemwrite:autosave';
-const VERSIONS_KEY = 'chemwrite:versions';
-const PREFS_KEY = 'chemwrite:prefs';
-const SEEN_KEY = 'chemwrite:welcomed';
+const AUTOSAVE_KEY = 'chirally:autosave';
+const VERSIONS_KEY = 'chirally:versions';
+const PREFS_KEY = 'chirally:prefs';
+const SEEN_KEY = 'chirally:welcomed';
 
 type TabId = 'analysis' | 'pubchem' | 'mechanism' | '3d' | 'library' | 'style';
 
@@ -129,7 +129,7 @@ export class App {
     const themeBtn = btn(this.isDark() ? 'sun' : 'moon', 'Toggle dark mode', () => this.toggleTheme());
     themeBtn.classList.add('theme-btn');
     const topbar = h('header', { class: 'topbar' },
-      h('div', { class: 'brand', title: 'ChemWrite' }, h('span', { class: 'logo', html: ICONS.benzene }), h('span', { class: 'brand-name hide-sm' }, 'ChemWrite')),
+      h('div', { class: 'brand', title: 'Chirally' }, h('span', { class: 'logo', html: ICONS.benzene }), h('span', { class: 'brand-name hide-sm' }, 'Chirally')),
       fileMenuBtn, editMenuBtn, viewMenuBtn,
       h('div', { class: 'sep hide-sm' }),
       this.undoBtn, this.redoBtn,
@@ -433,7 +433,7 @@ export class App {
   insertFromText(text: string, fileName: string | null, name?: string, opts: { suppressH?: boolean } = {}): void {
     try {
       const r = importText(text, fileName, opts);
-      if (r.kind === 'chemwrite') {
+      if (r.kind === 'chirally') {
         this.mergeDoc(docFromJSON(text));
         return;
       }
@@ -523,7 +523,7 @@ export class App {
     const f = file ?? (await pickFile());
     if (!f) return;
     const text = await f.text();
-    const isNative = /\.(cwj|chemwrite|json)$/i.test(f.name) || text.trimStart().startsWith('{');
+    const isNative = /\.(chirally|json)$/i.test(f.name) || text.trimStart().startsWith('{');
     if (isNative) {
       try {
         const doc = docFromJSON(text);
@@ -609,7 +609,7 @@ export class App {
       navigator.clipboard.write([new CI(items)]).catch(() => navigator.clipboard.writeText(plain).catch(() => undefined));
     } else navigator.clipboard?.writeText(plain).catch(() => undefined);
     if (cut) ed.deleteSelected();
-    toast(cut ? 'Cut' : smi ? 'Copied (paste into ChemWrite, or as SMILES elsewhere)' : 'Copied', 'success', 1600);
+    toast(cut ? 'Cut' : smi ? 'Copied (paste into Chirally, or as SMILES elsewhere)' : 'Copied', 'success', 1600);
   }
 
   async paste(text?: string): Promise<void> {
@@ -674,7 +674,7 @@ export class App {
       doc.curved.set(a2, { id: a2, type: 'curved', electrons: 2, from: { type: 'bond', id: cbBond }, to: { type: 'atom', id: brId }, c1: { t: 0.3, h: 0.55 }, c2: { t: 0.95, h: 0.55 } });
       const t2 = doc.nextId++;
       doc.texts.set(t2, { id: t2, type: 'text', x: -0.5, y: 3.6, text: '**S_N2 mechanism** — open the Mechanism tab and press “Apply arrows”', size: 0.9 });
-      doc.meta.title = 'ChemWrite examples';
+      doc.meta.title = 'Chirally examples';
       if (!isDocEmpty(ed.doc)) this.recordVersion(true);
       ed.setDoc(doc);
       this.updateTitle();
@@ -689,7 +689,7 @@ export class App {
     const C = (id: string, title: string, run: () => void, keys?: string, section = 'Command'): Command => ({ id, title, run, keys, section });
     return [
       C('new', 'New drawing', () => this.newDoc(), undefined, 'File'),
-      C('open', 'Open file… (CWJ, MOL, SDF, CDXML, RXN, CML, XYZ, SMILES)', () => this.openFile(), 'Ctrl O', 'File'),
+      C('open', 'Open file… (Chirally, MOL, SDF, CDXML, RXN, CML, XYZ, SMILES)', () => this.openFile(), 'Ctrl O', 'File'),
       C('save', 'Save', () => this.save(), 'Ctrl S', 'File'),
       C('saveas', 'Save as…', () => this.save(true), 'Ctrl Shift S', 'File'),
       C('export', 'Export…', () => exportDialog(this), 'Ctrl E', 'File'),
@@ -931,7 +931,7 @@ export class App {
     const smi = this.currentSmiles();
     ed.setInternalClipboard(json, smi);
     e.clipboardData?.setData('text/plain', smi);
-    e.clipboardData?.setData('application/x-chemwrite+json', json);
+    e.clipboardData?.setData('application/x-chirally+json', json);
     toast('Copied — pastes as a structure here or as SMILES elsewhere', 'success', 1600);
   }
 
@@ -1037,7 +1037,7 @@ export class App {
     const ed = this.editor;
     if (this.prefs.grid) Object.assign(ed.grid, this.prefs.grid);
     if (this.prefs.wheelZooms !== undefined) ed.wheelZooms = this.prefs.wheelZooms;
-    if (this.prefs.style) ed.doc.style = { ...STYLE_PRESETS.ChemWrite, ...this.prefs.style };
+    if (this.prefs.style) ed.doc.style = { ...STYLE_PRESETS.Chirally, ...this.prefs.style };
     if (await this.loadHash()) return;
     try {
       const saved = localStorage.getItem(AUTOSAVE_KEY);
@@ -1084,7 +1084,7 @@ export class App {
   private updateTitle(): void {
     const t = this.editor.doc.meta.title || 'Untitled';
     if (this.titleEl && document.activeElement !== this.titleEl) this.titleEl.value = t;
-    document.title = `${t} — ChemWrite`;
+    document.title = `${t} — Chirally`;
   }
 }
 

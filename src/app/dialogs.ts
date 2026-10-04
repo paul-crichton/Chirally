@@ -46,7 +46,7 @@ export function exportDialog(app: App): void {
     { id: 'smiles', label: 'SMILES', desc: 'Canonical, with stereo' },
     { id: 'rxn', label: 'RXN file', desc: 'Reaction (left/right of arrow)' },
     { id: 'cml', label: 'CML', desc: 'Chemical Markup Language' },
-    { id: 'cwj', label: 'ChemWrite (.cwj)', desc: 'Native, lossless' },
+    { id: 'chirally', label: 'Chirally (.chirally)', desc: 'Native, lossless' },
   ];
   const list = h('div', { class: 'fmt-list', role: 'radiogroup' });
   const scale = h('select', { class: 'input input-small', 'aria-label': 'PNG scale' }, [1, 2, 3, 4, 6].map((s) => h('option', { value: s, selected: s === 3 }, `${s}× (${Math.round(96 * s)} dpi)`))) as HTMLSelectElement;
@@ -149,7 +149,7 @@ export async function shareDialog(app: App): Promise<void> {
   try {
     const url = await shareLink(app.editor.doc);
     const input = h('input', { class: 'input', value: url, readonly: true, 'aria-label': 'Share link' }) as HTMLInputElement;
-    const note = url.length > 8000 ? h('p', { class: 'warn small' }, 'This drawing is large — very long links may not work in every app. Consider saving a .cwj file instead.') : null;
+    const note = url.length > 8000 ? h('p', { class: 'warn small' }, 'This drawing is large — very long links may not work in every app. Consider saving a .chirally file instead.') : null;
     modal('Share link', h('div', null, h('p', { class: 'small' }, 'Anyone with this link opens a copy of the drawing. Nothing is uploaded — the drawing is encoded in the link itself.'), input, note), {
       actions: [{ label: 'Copy link', primary: true, onClick: () => { copyText(url, 'Link'); } }],
     });
@@ -178,16 +178,16 @@ export function versionsDialog(app: App): void {
 
 export function welcomeDialog(app: App): void {
   const body = h('div', { class: 'welcome' },
-    h('p', null, 'ChemWrite is a structure editor in your browser: draw molecules and reaction mechanisms, look compounds up in PubChem, and get IUPAC names, properties and 3D models as you draw.'),
+    h('p', null, 'Chirally is a structure editor in your browser: draw molecules and reaction mechanisms, look compounds up in PubChem, and get IUPAC names, properties and 3D models as you draw.'),
     h('ul', null,
       h('li', null, h('b', null, 'Draw: '), 'click to add bonds, drag to draw at 15° steps, hover an atom and type a letter (O, N, Cl…) to change it.'),
-      h('li', null, h('b', null, 'Mechanisms: '), 'draw curved arrows (Shift+A), then ', h('i', null, 'Apply arrows'), ' in the Mechanism tab. ChemWrite works out the next intermediate for you.'),
+      h('li', null, h('b', null, 'Mechanisms: '), 'draw curved arrows (Shift+A), then ', h('i', null, 'Apply arrows'), ' in the Mechanism tab. Chirally works out the next intermediate for you.'),
       h('li', null, h('b', null, 'PubChem: '), 'press Ctrl+K and type a name or CAS number (e.g. “niacinamide”, “50-78-2”).'),
       h('li', null, h('b', null, 'Formulation: '), 'the Analysis tab shows cLogP, TPSA, skin-permeability estimates and HLB for surfactants.'),
       h('li', null, h('b', null, 'Touch: '), 'tap to draw, pinch to zoom, two fingers to pan, long-press for the context menu.'),
     ),
   );
-  modal('Welcome to ChemWrite', body, {
+  modal('Welcome to Chirally', body, {
     actions: [
       { label: 'Keyboard shortcuts', onClick: () => { shortcutsDialog(); } },
       { label: 'Load an example', onClick: () => { app.loadExample(); } },

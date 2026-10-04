@@ -4,7 +4,7 @@ import { App } from './app/app';
 const root = document.getElementById('app')!;
 const app = new App(root);
 // expose for debugging and end-to-end tests
-(window as unknown as { chemwrite: App }).chemwrite = app;
+(window as unknown as { chirally: App }).chirally = app;
 
 // offline support in production builds
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

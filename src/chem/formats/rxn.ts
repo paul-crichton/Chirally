@@ -85,8 +85,10 @@ export function writeRxn(r: { reactants: Mol[]; products: Mol[]; agents?: Mol[] 
   const d = new Date();
   const p2 = (v: number) => String(v).padStart(2, '0');
   const stamp = p2(d.getMonth() + 1) + p2(d.getDate()) + d.getFullYear() + p2(d.getHours()) + p2(d.getMinutes());
+  // header line: 6 columns of user initials, the 9-column program name, then MMDDYYYYHHmm
+  const header = '      ' + 'Chirally'.padEnd(9) + stamp;
   if (big) {
-    const out = ['$RXN V3000', '', '      ChemWrite' + stamp, '', `M  V30 COUNTS ${r.reactants.length} ${r.products.length}${agents.length ? ' ' + agents.length : ''}`];
+    const out = ['$RXN V3000', '', header, '', `M  V30 COUNTS ${r.reactants.length} ${r.products.length}${agents.length ? ' ' + agents.length : ''}`];
     const block = (name: string, list: Mol[]) => {
       if (!list.length) return;
       out.push(`M  V30 BEGIN ${name}`);
@@ -100,7 +102,7 @@ export function writeRxn(r: { reactants: Mol[]; products: Mol[]; agents?: Mol[] 
     return out.join('\n');
   }
   const pad3 = (v: number) => String(v).padStart(3);
-  let s = '$RXN\n\n      ChemWrite' + stamp + '\n\n';
+  let s = '$RXN\n\n' + header + '\n\n';
   s += pad3(r.reactants.length) + pad3(r.products.length) + (agents.length ? pad3(agents.length) : '') + '\n';
   for (const m of all) s += '$MOL\n' + writeMolfile(m, { title: m.name });
   return s;

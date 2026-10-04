@@ -620,7 +620,7 @@ function headerLines(title: string, threeD: boolean): string[] {
   const d = new Date();
   const p2 = (v: number) => String(v).padStart(2, '0');
   const stamp = p2(d.getMonth() + 1) + p2(d.getDate()) + p2(d.getFullYear() % 100) + p2(d.getHours()) + p2(d.getMinutes());
-  return [title.replace(/[\r\n]+/g, ' ').slice(0, 80), '  ChemWrit' + stamp + (threeD ? '3D' : '2D'), ''];
+  return [title.replace(/[\r\n]+/g, ' ').slice(0, 80), '  Chirally' + stamp + (threeD ? '3D' : '2D'), ''];
 }
 
 /** Writes a molfile (V2000 by default; V3000 when requested or for > 999 atoms/bonds). */

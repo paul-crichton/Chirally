@@ -1,9 +1,9 @@
-# ChemWrite
+# Chirally
 
 A ChemDraw / ChemSketch-style chemical structure and reaction-mechanism editor that runs entirely in the browser.
 It's designed mainly for mouse and keyboard, and also works with touch on tablets and phones.
 
-![ChemWrite: reaction scheme, SN2 mechanism and live analysis of the selected product](docs/screenshot.png)
+![Chirally: reaction scheme, SN2 mechanism and live analysis of the selected product](docs/screenshot.png)
 
 ## Highlights
 
@@ -44,13 +44,13 @@ It's designed mainly for mouse and keyboard, and also works with touch on tablet
 - *Identify* the structure you've drawn, find similar compounds, and look up CAS numbers, synonyms and **GHS hazard pictograms and statements**.
 
 **Files**
-- Native `.cwj` (lossless JSON), **ChemDraw CDXML** (import and export), MOL V2000/V3000, SDF, RXN, CML, XYZ and SMILES.
+- Native `.chirally` (lossless JSON), **ChemDraw CDXML** (import and export), MOL V2000/V3000, SDF, RXN, CML, XYZ and SMILES.
 - Export to SVG and PNG (up to 6×, optionally transparent), copy as image, and drag files onto the canvas to open them.
 - Autosave, version history, and share links. A share link encodes the drawing into the URL itself; nothing is uploaded.
 
 ## Features ChemDraw doesn't have
 
-1. **Arrow-pushing simulator**: draw the curved arrows and ChemWrite works out the next intermediate, charges included.
+1. **Arrow-pushing simulator**: draw the curved arrows and Chirally works out the next intermediate, charges included.
 2. **Formulation insights** for cosmetic and pharma formulators:
    - skin-penetration checks (500 Da rule, logP 1–3, Potts–Guy log Kp);
    - HLB (Davies and Griffin) for surfactants, with how to use the value;
@@ -86,6 +86,8 @@ On touch screens: tap to draw, drag to draw at an angle, pinch to zoom, two fing
 ## Development
 
 ```bash
+git clone git@github.com:paul-crichton/Chirally.git
+cd Chirally
 npm install
 npm run dev        # http://localhost:5173
 npm test           # unit tests (Vitest, 1,134 tests)
@@ -94,6 +96,10 @@ npm run build      # static production build in dist/
 ```
 
 There are no runtime dependencies: the chemistry engine, renderer, file formats, force field and 3D viewer are written from scratch in TypeScript. The only network calls go to PubChem's public, CORS-enabled REST API.
+
+### Hosting
+
+`npm run build` produces a static site in `dist/` with no server-side code; serve it with any web server (nginx, Caddy, a Proxmox LXC, GitHub Pages…), at the site root or under a sub-path. PubChem lookups are made by the visitor's browser, so the server itself needs no internet access. Serve it over HTTPS (or open it on `localhost`) to get offline use, installing it as an app, copying images to the system clipboard and the browser's native Save dialog; over plain HTTP everything else works, and Save downloads the file instead.
 
 ### Architecture
 

@@ -253,8 +253,8 @@ export function stripHydrogens(m: Mol): Mol {
 function importTextRaw(text: string, fileName: string | null): ImportResult {
   const fmt = F.detectFormat(fileName, text);
   switch (fmt) {
-    case 'chemwrite':
-      return { kind: 'chemwrite' };
+    case 'chirally':
+      return { kind: 'chirally' };
     case 'cdxml':
       return { doc: F.readCDXML(text), kind: 'CDXML' };
     case 'mol': {

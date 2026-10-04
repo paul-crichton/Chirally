@@ -9,7 +9,7 @@ import { expandAbbreviations } from '../chem/abbreviations';
 import { perceiveStereo2D } from '../chem/stereo2d';
 import { Mol } from '../chem/mol';
 
-export const OPEN_ACCEPT = '.cwj,.chemwrite,.json,.mol,.sdf,.sd,.rxn,.cdxml,.cml,.xyz,.smi,.smiles,.txt';
+export const OPEN_ACCEPT = '.chirally,.json,.mol,.sdf,.sd,.rxn,.cdxml,.cml,.xyz,.smi,.smiles,.txt';
 
 export function pickFile(accept = OPEN_ACCEPT): Promise<File | null> {
   return new Promise((resolve) => {
@@ -36,14 +36,14 @@ export function setFileHandle(h: any): void {
 
 export async function saveNative(doc: ChemDoc, saveAs = false): Promise<string | null> {
   const json = docToJSON(doc, true);
-  const name = safeName(doc.meta.title || 'structure') + '.cwj';
+  const name = safeName(doc.meta.title || 'structure') + '.chirally';
   const w = window as any;
   if (w.showSaveFilePicker) {
     try {
       if (!fileHandle || saveAs) {
         fileHandle = await w.showSaveFilePicker({
           suggestedName: name,
-          types: [{ description: 'ChemWrite document', accept: { 'application/json': ['.cwj'] } }],
+          types: [{ description: 'Chirally document', accept: { 'application/json': ['.chirally'] } }],
         });
       }
       const ws = await fileHandle.createWritable();
@@ -65,7 +65,7 @@ export function safeName(s: string): string {
 
 // ───────────── export ─────────────
 
-export type ExportFormat = 'svg' | 'png' | 'mol' | 'sdf' | 'smiles' | 'cdxml' | 'rxn' | 'cwj' | 'cml';
+export type ExportFormat = 'svg' | 'png' | 'mol' | 'sdf' | 'smiles' | 'cdxml' | 'rxn' | 'chirally' | 'cml';
 
 export interface ExportOptions {
   /** Restrict to these atom/object ids (selection); null = everything */
@@ -141,8 +141,8 @@ export async function exportDoc(doc: ChemDoc, fmt: ExportFormat, opts: ExportOpt
       downloadBlob(new Blob([formats.writeRxn(r)], { type: 'chemical/x-mdl-rxnfile' }), base + '.rxn');
       break;
     }
-    case 'cwj':
-      downloadBlob(new Blob([docToJSON(d, true)], { type: 'application/json' }), base + '.cwj');
+    case 'chirally':
+      downloadBlob(new Blob([docToJSON(d, true)], { type: 'application/json' }), base + '.chirally');
       break;
   }
 }

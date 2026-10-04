@@ -1,6 +1,6 @@
 // ChemDraw XML (CDXML) reader/writer for whole canvas documents.
 //
-// CDXML coordinates are points with y DOWN (same orientation as ChemWrite); one model unit is the
+// CDXML coordinates are points with y DOWN (same orientation as Chirally); one model unit is the
 // document's BondLength (default 14.4 pt). Reading turns fragments into atoms/bonds, <t> into text
 // objects, <arrow>/<graphic>/<curve> into arrows, curved arrows and shapes. Unknown elements are
 // skipped. Writing produces a CDXML file ChemDraw can open (nodes, bonds with wedge Display
@@ -84,7 +84,7 @@ interface ReadCtx {
   arrowIds: Map<string, ArrowObj>;
 }
 
-/** Reads a CDXML document into a ChemWrite document. */
+/** Reads a CDXML document into a Chirally document. */
 export function readCDXML(xml: string): ChemDoc {
   return guard('CDXML', () => {
     const root = parseXml(xml, 'CDXML');
@@ -293,7 +293,7 @@ function formulaToMarkup(t: string): string {
   return t + (charge ? wrapMarkup(charge, '^') : '');
 }
 
-/** CDXML style runs → ChemWrite text markup (+ whole-text flags). */
+/** CDXML style runs → Chirally text markup (+ whole-text flags). */
 function runsToMarkup(runs: Run[]): { text: string; formula?: boolean; bold?: boolean; italic?: boolean } {
   const visible = runs.filter((r) => r.text.trim());
   const join = runs.map((r) => r.text).join('').replace(/\r\n?/g, '\n');
@@ -589,7 +589,7 @@ const f2 = (v: number) => {
   return s === '-0' ? '0' : s;
 };
 
-/** Parses ChemWrite text markup into CDXML style runs (face bits: 1 bold, 2 italic, 32 sub, 64 sup). */
+/** Parses Chirally text markup into CDXML style runs (face bits: 1 bold, 2 italic, 32 sub, 64 sup). */
 function markupToRuns(text: string, baseFace: number): { text: string; face: number }[] {
   const runs: { text: string; face: number }[] = [];
   let bold = false, italic = false;
@@ -638,7 +638,7 @@ interface WriteCtx {
   colors: string[];
 }
 
-/** Writes a ChemWrite document as CDXML. */
+/** Writes a Chirally document as CDXML. */
 export function writeCDXML(doc: ChemDoc): string {
   const BL = doc.style?.bondLengthPt > 0 ? doc.style.bondLengthPt : DEFAULT_BOND_LENGTH_PT;
   const bounds = docBounds(doc) ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
@@ -864,7 +864,7 @@ export function writeCDXML(doc: ChemDoc): string {
   const H = Math.max(720, (bounds.maxY - bounds.minY) * BL + 2 * margin);
   const st = doc.style;
   const rootAttrs = attrs({
-    CreationProgram: 'ChemWrite',
+    CreationProgram: 'Chirally',
     Name: doc.meta?.title || undefined,
     BoundingBox: `0 0 ${f2(W)} ${f2(H)}`,
     WindowPosition: '0 0',

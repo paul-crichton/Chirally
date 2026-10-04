@@ -65,7 +65,7 @@ function median(values: number[]): number {
 
 /**
  * Converts raw file coordinates (Å, y up) of one or more molecules that share a coordinate frame
- * (e.g. the components of a reaction) to ChemWrite model coordinates:
+ * (e.g. the components of a reaction) to Chirally model coordinates:
  *  - 3D (z has spread): y flipped, no scaling, props.dim = '3D';
  *  - 2D: z dropped, y flipped, scaled so the median bond length becomes 1;
  *  - no coordinates (all atoms coincident): left untouched (callers lay them out).

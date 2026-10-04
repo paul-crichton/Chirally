@@ -1,6 +1,6 @@
 {
-  "name": "ChemWrite",
-  "short_name": "ChemWrite",
+  "name": "Chirally",
+  "short_name": "Chirally",
   "description": "Chemical structure & mechanism editor",
   "start_url": "./",
   "display": "standalone",

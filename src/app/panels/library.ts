@@ -10,7 +10,7 @@ import { primsToSVG } from '../../render/draw';
 import { parseSmiles } from '../../chem/smiles';
 import { layoutMol } from '../../chem/layout2d';
 
-const USER_KEY = 'chemwrite:userTemplates';
+const USER_KEY = 'chirally:userTemplates';
 
 interface UserTemplate {
   name: string;

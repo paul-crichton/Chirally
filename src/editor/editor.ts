@@ -88,7 +88,7 @@ export class Editor {
   constructor(container: HTMLElement) {
     this.container = container;
     this.canvas = document.createElement('canvas');
-    this.canvas.className = 'cw-canvas';
+    this.canvas.className = 'chirally-canvas';
     this.canvas.tabIndex = 0;
     this.canvas.setAttribute('aria-label', 'Chemical structure drawing canvas');
     container.appendChild(this.canvas);
@@ -907,7 +907,7 @@ export class Editor {
     this.commitInlineEditor();
     const sp = this.toScreen(at);
     const el = document.createElement(opts.multiline ? 'textarea' : 'input') as HTMLInputElement | HTMLTextAreaElement;
-    el.className = 'cw-inline-editor';
+    el.className = 'chirally-inline-editor';
     el.value = initial;
     el.placeholder = opts.placeholder ?? '';
     el.spellcheck = false;
@@ -1042,7 +1042,7 @@ export class Editor {
     return this.internalClipboard;
   }
 
-  /** Pastes a serialized ChemWrite fragment, offset to `at` (or slightly shifted). Returns new selection. */
+  /** Pastes a serialized Chirally fragment, offset to `at` (or slightly shifted). Returns new selection. */
   pasteDocJSON(json: string, at?: Pt): void {
     const frag = deserializeDoc(JSON.parse(json));
     const b = docBounds(frag);

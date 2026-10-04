@@ -1,16 +1,16 @@
 // File-format detection by extension and content sniffing.
 import { parseSmiles, parseReactionSmiles } from '../smiles';
 
-export type FormatId = 'chemwrite' | 'mol' | 'sdf' | 'rxn' | 'cdxml' | 'cml' | 'xyz' | 'smiles' | 'unknown';
+export type FormatId = 'chirally' | 'mol' | 'sdf' | 'rxn' | 'cdxml' | 'cml' | 'xyz' | 'smiles' | 'unknown';
 
 const BY_EXTENSION: Record<string, FormatId> = {
   mol: 'mol', mdl: 'mol', sdf: 'sdf', sd: 'sdf', rxn: 'rxn', cdxml: 'cdxml', cml: 'cml', xyz: 'xyz',
-  smi: 'smiles', smiles: 'smiles', cwj: 'chemwrite', chemwrite: 'chemwrite', json: 'chemwrite',
+  smi: 'smiles', smiles: 'smiles', chirally: 'chirally', json: 'chirally',
 };
 
 /**
  * Guesses the format of a file. A known extension wins (except that a ".mol" file holding several
- * records is reported as SDF, and a ".json" file that is not a ChemWrite document as unknown);
+ * records is reported as SDF, and a ".json" file that is not a Chirally document as unknown);
  * otherwise the content is sniffed.
  */
 export function detectFormat(fileName: string | null, text: string): FormatId {
@@ -19,7 +19,7 @@ export function detectFormat(fileName: string | null, text: string): FormatId {
   const sniffed = sniff(text ?? '');
   if (byExt) {
     if (byExt === 'mol' && (sniffed === 'sdf' || sniffed === 'rxn')) return sniffed;
-    if (byExt === 'chemwrite' && ext === 'json' && sniffed !== 'chemwrite') return 'unknown';
+    if (byExt === 'chirally' && ext === 'json' && sniffed !== 'chirally') return 'unknown';
     return byExt;
   }
   return sniffed;
@@ -30,7 +30,7 @@ function sniff(raw: string): FormatId {
   const head = text.slice(0, 4096);
   const trimmed = head.trimStart();
   if (!trimmed) return 'unknown';
-  if (trimmed.startsWith('{')) return /"format"\s*:\s*"chemwrite"/.test(head) ? 'chemwrite' : 'unknown';
+  if (trimmed.startsWith('{')) return /"format"\s*:\s*"chirally"/.test(head) ? 'chirally' : 'unknown';
   if (trimmed.startsWith('$RXN')) return 'rxn';
   if (trimmed.startsWith('<')) {
     if (/<CDXML[\s>]/.test(head)) return 'cdxml';

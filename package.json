@@ -1,9 +1,9 @@
 {
-  "name": "chemwrite",
+  "name": "chirally",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "ChemWrite — a web-based chemical structure drawing and mechanism editor",
+  "description": "Chirally — a web-based chemical structure drawing and mechanism editor",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

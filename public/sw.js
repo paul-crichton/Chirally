@@ -1,9 +1,9 @@
-// ChemWrite service worker: offline support for the app shell (same-origin GET requests only).
+// Chirally service worker: offline support for the app shell (same-origin GET requests only).
 // The cache name and the precache list are stamped at build time (see vite.config.ts).
-const PREFIX = 'chemwrite-';
+const PREFIX = 'chirally-';
 const CACHE = PREFIX + '__BUILD_ID__';
 const PRECACHE = /*__PRECACHE__*/ [];
-const SHELL = new URL('./', self.location).href; // the app's index.html, e.g. https://<user>.github.io/Chemwrite/
+const SHELL = new URL('./', self.location).href; // the app's index.html, e.g. https://<user>.github.io/Chirally/
 const ASSETS = new URL('./assets/', self.location).pathname; // content-hashed build output
 
 self.addEventListener('install', (e) => {
@@ -16,7 +16,7 @@ self.addEventListener('install', (e) => {
   );
 });
 self.addEventListener('activate', (e) => {
-  // Only remove ChemWrite's own old caches: Cache Storage is shared by every site on the origin.
+  // Only remove Chirally's own old caches: Cache Storage is shared by every site on the origin.
   e.waitUntil(
     caches
       .keys()

@@ -1,6 +1,6 @@
 // XYZ coordinate files: atom count, comment line, then "symbol x y z" (Å) per atom.
 // Bonds are perceived from covalent radii; bond orders for C/N/O/S are assigned heuristically.
-// Like molfiles, y is flipped into ChemWrite's y-down frame (z kept); props.dim = '3D'.
+// Like molfiles, y is flipped into Chirally's y-down frame (z kept); props.dim = '3D'.
 import { Mol } from '../mol';
 import { element } from '../elements';
 import { FormatError, guard, splitLines, normalizeElement, elementByNumber, perceiveStereo, fixed } from './common';

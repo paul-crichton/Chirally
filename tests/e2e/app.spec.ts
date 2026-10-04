@@ -13,7 +13,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test('draws a bond with a click and changes an atom with a hotkey', async ({ page }) => {
-  const canvas = page.locator('canvas.cw-canvas');
+  const canvas = page.locator('canvas.chirally-canvas');
   const box = (await canvas.boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   expect(await atomCount(page)).toBe(2);
@@ -35,7 +35,7 @@ test('draws a bond with a click and changes an atom with a hotkey', async ({ pag
 
 test('ring tool places benzene and analysis shows formula', async ({ page }) => {
   await page.keyboard.press('r');
-  const box = (await page.locator('canvas.cw-canvas').boundingBox())!;
+  const box = (await page.locator('canvas.chirally-canvas').boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   expect(await atomCount(page)).toBe(6);
   await expect(page.locator('.iupac')).toHaveText('benzene');
@@ -52,7 +52,7 @@ test('command palette inserts SMILES and names it', async ({ page }) => {
 });
 
 test('drag-drawing snaps bond angles and joins atoms', async ({ page }) => {
-  const box = (await page.locator('canvas.cw-canvas').boundingBox())!;
+  const box = (await page.locator('canvas.chirally-canvas').boundingBox())!;
   const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
   await page.mouse.down();
@@ -60,21 +60,21 @@ test('drag-drawing snaps bond angles and joins atoms', async ({ page }) => {
   await page.mouse.move(cx + 60, cy + 4, { steps: 4 });
   await page.mouse.up();
   const angle = await page.evaluate(() => {
-    const atoms = [...(window as any).chemwrite.editor.doc.atoms.values()];
+    const atoms = [...(window as any).chirally.editor.doc.atoms.values()];
     return (Math.atan2(atoms[1].y - atoms[0].y, atoms[1].x - atoms[0].x) * 180) / Math.PI;
   });
   expect(Math.abs(angle % 15)).toBeLessThan(0.01);
 });
 
 test('mechanism example: apply arrows generates the SN2 product', async ({ page }) => {
-  await page.evaluate(() => (window as any).chemwrite.loadExample());
+  await page.evaluate(() => (window as any).chirally.loadExample());
   await page.locator('.tab', { hasText: 'Mechanism' }).click();
   const before = await atomCount(page);
   await page.getByRole('button', { name: /Apply arrows/ }).click();
   const after = await atomCount(page);
   expect(after).toBeGreaterThan(before);
   const product = await page.evaluate(() => {
-    const app = (window as any).chemwrite;
+    const app = (window as any).chirally;
     const doc = app.editor.doc;
     const arrows = [...doc.arrows.values()];
     const last = arrows[arrows.length - 1];
@@ -86,15 +86,15 @@ test('mechanism example: apply arrows generates the SN2 product', async ({ page 
 });
 
 test('save/load round trip via JSON', async ({ page }) => {
-  await page.evaluate(() => (window as any).chemwrite.insertFromText('OC(=O)c1ccccc1O', null));
+  await page.evaluate(() => (window as any).chirally.insertFromText('OC(=O)c1ccccc1O', null));
   const json = await page.evaluate(() => {
-    const m = (window as any).chemwrite;
-    return JSON.stringify((window as any).chemwrite.editor.doc.atoms.size) + '|' + m.currentSmiles();
+    const m = (window as any).chirally;
+    return JSON.stringify((window as any).chirally.editor.doc.atoms.size) + '|' + m.currentSmiles();
   });
   expect(json).toContain('|');
   const smi = await smiles(page);
   await page.evaluate(() => {
-    const app = (window as any).chemwrite;
+    const app = (window as any).chirally;
     const data = app.editor.selectionToJSON();
     app.newDoc = app.newDoc.bind(app);
     app.editor.selectAll();
@@ -105,7 +105,7 @@ test('save/load round trip via JSON', async ({ page }) => {
 });
 
 test('export SVG downloads a file', async ({ page }) => {
-  await page.evaluate(() => (window as any).chemwrite.insertFromText('c1ccccc1O', null));
+  await page.evaluate(() => (window as any).chirally.insertFromText('c1ccccc1O', null));
   await page.keyboard.press('Control+e');
   await page.locator('.fmt', { hasText: 'SVG vector' }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export', exact: true }).click()]);
@@ -113,14 +113,14 @@ test('export SVG downloads a file', async ({ page }) => {
 });
 
 test('3D model generation reports a UFF energy', async ({ page }) => {
-  await page.evaluate(() => (window as any).chemwrite.insertFromText('CCO', null));
+  await page.evaluate(() => (window as any).chirally.insertFromText('CCO', null));
   await page.locator('.tab', { hasText: '3D' }).click();
   await page.getByRole('button', { name: 'Generate 3D' }).click();
   await expect(page.locator('.viewer-info')).toContainText('kcal/mol', { timeout: 30000 });
 });
 
 test('screenshot of example drawing', async ({ page }) => {
-  await page.evaluate(() => (window as any).chemwrite.loadExample());
+  await page.evaluate(() => (window as any).chirally.loadExample());
   await page.waitForTimeout(400);
   await page.screenshot({ path: 'test-results/example-desktop.png' });
 });

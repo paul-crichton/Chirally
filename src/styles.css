@@ -1,4 +1,4 @@
-/* ChemWrite UI styles. Light/dark themes via CSS variables; responsive down to phones. */
+/* Chirally UI styles. Light/dark themes via CSS variables; responsive down to phones. */
 :root {
   --bg: #f4f5f7;
   --panel: #ffffff;
@@ -423,7 +423,7 @@ code {
   touch-action: none;
 }
 .canvas-host.drop::after {
-  content: 'Drop a file to open (CWJ, MOL, SDF, CDXML, RXN, CML, XYZ, SMILES)';
+  content: 'Drop a file to open (Chirally, MOL, SDF, CDXML, RXN, CML, XYZ, SMILES)';
   position: absolute;
   inset: 12px;
   border: 2px dashed var(--accent);
@@ -436,7 +436,7 @@ code {
   font-weight: 600;
   pointer-events: none;
 }
-.cw-canvas {
+.chirally-canvas {
   display: block;
   outline: none;
   touch-action: none;
@@ -444,7 +444,7 @@ code {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-.cw-inline-editor {
+.chirally-inline-editor {
   position: absolute;
   z-index: 20;
   transform: translate(-30%, -50%);
@@ -458,7 +458,7 @@ code {
   font-family: Arial, Helvetica, sans-serif;
   outline: none;
 }
-textarea.cw-inline-editor {
+textarea.chirally-inline-editor {
   transform: translate(0, 0);
   min-height: 60px;
   resize: both;

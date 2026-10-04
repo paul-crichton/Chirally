@@ -205,14 +205,14 @@ export class Viewer3DPanel {
 
   private exportXYZ(): void {
     if (!this.mol3d) return toast('Generate a 3D model first', 'error');
-    downloadBlob(new Blob([toXYZ(this.mol3d, this.source || 'ChemWrite 3D model')], { type: 'chemical/x-xyz' }), 'structure3d.xyz');
+    downloadBlob(new Blob([toXYZ(this.mol3d, this.source || 'Chirally 3D model')], { type: 'chemical/x-xyz' }), 'structure3d.xyz');
   }
 
   private exportMol(): void {
     if (!this.mol3d) return toast('Generate a 3D model first', 'error');
     const m = this.mol3d;
     m.props = { ...m.props, dim: '3D' };
-    downloadBlob(new Blob([writeMolfile(m, { title: 'ChemWrite 3D (UFF)' })], { type: 'chemical/x-mdl-molfile' }), 'structure3d.mol');
+    downloadBlob(new Blob([writeMolfile(m, { title: 'Chirally 3D (UFF)' })], { type: 'chemical/x-mdl-molfile' }), 'structure3d.mol');
   }
 
   private exportPNG(): void {

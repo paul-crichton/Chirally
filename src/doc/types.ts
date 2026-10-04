@@ -1,4 +1,4 @@
-// Document model: everything that can live on a ChemWrite canvas.
+// Document model: everything that can live on a Chirally canvas.
 // Coordinates are in model units (1 = standard bond length), y DOWN.
 import type { Atom, Bond } from '../chem/mol';
 
@@ -146,8 +146,8 @@ export interface ChemDoc {
 export type DocObject = ArrowObj | CurvedArrowObj | TextObj | ShapeObj;
 
 export const STYLE_PRESETS: Record<string, DocStyle> = {
-  ChemWrite: {
-    name: 'ChemWrite',
+  Chirally: {
+    name: 'Chirally',
     bondLengthPt: 18,
     lineWidth: 0.055,
     boldWidth: 0.16,

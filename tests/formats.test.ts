@@ -92,6 +92,7 @@ describe('Molfile V2000', () => {
     const text = writeMolfile(decorated(), { title: 'decorated' });
     const lines = text.split('\n');
     expect(lines[0]).toBe('decorated');
+    expect(lines[1].slice(2, 10)).toBe('Chirally');
     expect(lines[1].slice(20, 22)).toBe('2D');
     expect(lines[3]).toMatch(/^  9  8  0  0  1  0  0  0  0  0999 V2000$/);
     // coordinates are scaled to 1.5 Å with y up
@@ -215,7 +216,7 @@ M  END
     expect(hasCoordinates(m)).toBe(false);
     expect(m.atoms.every((a) => a.x === 0 && a.y === 0)).toBe(true);
     const three = `3d
-  ChemWrit00000000003D
+  Chirally00000000003D
 
   3  2  0  0  0  0  0  0  0  0999 V2000
     0.0000    0.0000    0.1000 O   0  0  0  0  0  0  0  0  0  0  0  0
@@ -240,7 +241,7 @@ M  END
 describe('Molfile V3000', () => {
   it('reads a V3000 CTAB with charges, isotopes, radicals, stereo and continuation lines', () => {
     const text = `acetate
-  ChemWrit00000000002D
+  Chirally00000000002D
 
   0  0  0     0  0            999 V3000
 M  V30 BEGIN CTAB
@@ -521,6 +522,7 @@ describe('RXN', () => {
     };
     const text = writeRxn(r);
     expect(text.startsWith('$RXN')).toBe(true);
+    expect(text.split('\n')[2]).toMatch(/^ {6}Chirally \d{12}$/); // program name in columns 7-15, date from 16
     expect(text.split('\n')[4]).toBe('  2  2  1');
     const back = readRxn(text);
     expect(back.reactants.map((m) => canon(m))).toEqual(r.reactants.map((m) => writeSmiles(m)));
@@ -540,7 +542,7 @@ describe('RXN', () => {
   it('reads V3000 reactions', () => {
     const text = `$RXN V3000
 
-      ChemWrite100320261200
+      Chirally 100320261200
 
 M  V30 COUNTS 1 1
 M  V30 BEGIN REACTANT
@@ -1003,9 +1005,8 @@ describe('detectFormat', () => {
     expect(detectFormat('w.xyz', '')).toBe('xyz');
     expect(detectFormat('s.smi', '')).toBe('smiles');
     expect(detectFormat('s.smiles', '')).toBe('smiles');
-    expect(detectFormat('doc.cwj', '')).toBe('chemwrite');
-    expect(detectFormat('doc.chemwrite', '')).toBe('chemwrite');
-    expect(detectFormat('doc.json', '{"format":"chemwrite","version":1}')).toBe('chemwrite');
+    expect(detectFormat('doc.chirally', '')).toBe('chirally');
+    expect(detectFormat('doc.json', '{"format":"chirally","version":1}')).toBe('chirally');
     expect(detectFormat('data.json', '{"foo":1}')).toBe('unknown');
     expect(detectFormat('multi.mol', ASPIRIN_SDF + ASPIRIN_SDF)).toBe('sdf');
   });
@@ -1021,7 +1022,7 @@ describe('detectFormat', () => {
     expect(detectFormat(null, '3\nwater\nO 0 0 0\nH 0 0.75 0.5\nH 0 -0.75 0.5\n')).toBe('xyz');
     expect(detectFormat('clip.txt', 'CC(=O)Oc1ccccc1C(=O)O aspirin')).toBe('smiles');
     expect(detectFormat(null, 'CCO>>CC=O')).toBe('smiles');
-    expect(detectFormat(null, '  {"format": "chemwrite", "atoms": []}')).toBe('chemwrite');
+    expect(detectFormat(null, '  {"format": "chirally", "atoms": []}')).toBe('chirally');
     expect(detectFormat(null, 'hello world, this is not chemistry')).toBe('unknown');
     expect(detectFormat(null, '')).toBe('unknown');
     expect(detectFormat(null, '<html><body/></html>')).toBe('unknown');

@@ -21,7 +21,7 @@ export class MechanismPanel {
       h('div', { class: 'panel-body' },
         h('p', { class: 'small' },
           'Draw curved arrows from a ', h('b', null, 'lone pair (atom)'), ' or ', h('b', null, 'bond'), ' to an ', h('b', null, 'atom'), ', a ', h('b', null, 'bond'),
-          ' or the ', h('b', null, 'space between two atoms'), '. ChemWrite does the electron bookkeeping and draws the next intermediate for you.'),
+          ' or the ', h('b', null, 'space between two atoms'), '. Chirally does the electron bookkeeping and draws the next intermediate for you.'),
         h('div', { class: 'row-actions' },
           h('button', { class: 'btn', onclick: () => { ed.settings.curved = 2; ed.setTool('curved'); } }, svgEl(ICONS.curved2), 'Electron pair'),
           h('button', { class: 'btn', onclick: () => { ed.settings.curved = 1; ed.setTool('curved'); } }, svgEl(ICONS.curved1), 'Single electron'),
