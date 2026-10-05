@@ -4,7 +4,7 @@ import { ChemDoc, CurvedArrowObj, Anchor, ArrowObj } from './types';
 import { docToMol, adjacency, fragmentOf, docBounds } from './document';
 import { Mol, TetraSpec } from '../chem/mol';
 import { perceiveStereo2D, assignWedgesFromSpecs, isPotentialStereocenter } from '../chem/stereo2d';
-import { clean2D } from '../chem/clean2d';
+import { tidyProduct, arrangeRow } from './stepLayout';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit, bondValence } from '../chem/valence';
 import { kekulize } from '../chem/aromaticity';
 import { abbreviationMol, expandAbbreviations } from '../chem/abbreviations';
@@ -691,9 +691,15 @@ export interface StepPlacement {
   mol: Mol;
   /** The reaction (→) or resonance (↔) arrow drawn between reactants and product. */
   arrow: Omit<ArrowObj, 'id' | 'type'>;
+  /** Centres of the "+" signs between the species of the product. */
+  plus: { x: number; y: number }[];
 }
 
-/** Where a step's product and arrow go: to the right of the reactants and of anything else drawn in that row. */
+/**
+ * Where a step's product and arrow go: to the right of the reactants and of anything else drawn in that row.
+ * Molecules the step joined are brought together, rings it closed are cleaned, and the separate species are
+ * set out in a row (main product first) with "+" signs between them.
+ */
 export function placeStep(doc: ChemDoc, r: MechanismResult): StepPlacement | null {
   const ids = new Set(r.reactantAtomIds);
   const b = docBounds(doc, ids);
@@ -706,22 +712,10 @@ export function placeStep(doc: ChemDoc, r: MechanismResult): StepPlacement | nul
   for (const t of doc.texts.values()) if (t.x > b.maxX && inBand(t.y, t.y)) bandMax = Math.max(bandMax, t.x + 1);
   const startX = bandMax + 0.8;
   const arrowGap = 3.4;
-  // tidy bonds that were created between separate fragments
-  const formedLong = mol.bonds.some((bd) => {
-    const A = mol.atoms[bd.a], B = mol.atoms[bd.b];
-    return Math.hypot(A.x - B.x, A.y - B.y) > 1.6;
-  });
-  if (formedLong) {
-    try {
-      clean2D(mol);
-    } catch {
-      /* keep raw geometry */
-    }
-  }
-  const pb = mol.bbox();
   const midY = (b.minY + b.maxY) / 2;
-  mol.translate(startX + arrowGap - pb.minX + 0.2, midY - (pb.minY + pb.maxY) / 2);
-  return { mol, arrow: { kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + arrowGap - 0.8, y2: midY } };
+  tidyProduct(mol);
+  const row = arrangeRow(mol, startX + arrowGap - 0.2, midY);
+  return { mol, arrow: { kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + arrowGap - 0.8, y2: midY }, plus: row.plus };
 }
 
 /** Atoms whose electron count violates the octet/duet rule in the current drawing. */

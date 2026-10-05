@@ -128,6 +128,7 @@ export class MechanismPanel {
     const aid = doc.nextId++;
     doc.arrows.set(aid, { id: aid, type: 'arrow', ...placement.arrow });
     this.addProduct(doc, placement);
+    this.addPlusSigns(doc, placement);
     // remember the step so Apply moves on to the next one
     for (const id of arrowIds) {
       const c = doc.curved.get(id);
@@ -151,6 +152,15 @@ export class MechanismPanel {
     return atomIds;
   }
 
+  /** "+" signs between the species of the product, drawn like the ones of the plus tool. */
+  private addPlusSigns(target: ChemDoc, placement: StepPlacement): void {
+    const size = 1.4;
+    for (const p of placement.plus) {
+      const id = target.nextId++;
+      target.texts.set(id, { id, type: 'text', x: p.x, y: p.y + target.style.fontSize * size * 0.36, text: '+', size, align: 'center' });
+    }
+  }
+
   private showPending(): void {
     const p = this.pending!;
     const ed = this.app.editor;
@@ -158,6 +168,7 @@ export class MechanismPanel {
     const aid = ghost.nextId++;
     ghost.arrows.set(aid, { id: aid, type: 'arrow', ...p.placement.arrow });
     const atomIds = this.addProduct(ghost, p.placement);
+    this.addPlusSigns(ghost, p.placement);
     const bad = new Set(p.result.warnings.filter((w) => w.level === 'error').flatMap((w) => w.atomIds ?? []));
     const halo = new Map<number, string>();
     p.placement.mol.atoms.forEach((a, i) => {

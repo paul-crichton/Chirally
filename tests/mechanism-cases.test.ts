@@ -2,23 +2,23 @@
 // (polar, aromatic/radical/pericyclic and edge-case probes) whose findings were re-run by an
 // independent verifier.
 //
-//   it(...)        textbook cases the probes found CORRECT. They must keep passing.
-//   it.fails(...)  cases the verifier CONFIRMED as wrong today. Each one asserts the chemically correct
-//                  outcome, so it "passes" now because that assertion fails. Once the engine is fixed the
-//                  test starts failing: promote it to it(...) then.
+//   textbook mechanisms   cases the probes found correct. They must keep passing.
+//   the blocks after it   cases the verifier confirmed as wrong in the first engine. Each asserts the
+//                         chemically correct outcome; all of them pass since the engine was fixed. Mark a
+//                         new known bug it.fails(...) with the correct expectation until it is fixed.
 //
 // Geometry matters. When an arrow goes from a bond to an atom outside that bond, or from a lone pair to a
-// remote bond, the engine forms the new bond from whichever end is nearer in space. Coordinates are
-// therefore copied from the probes verbatim (1 = one bond length, y points down). Never "tidy" them.
+// remote bond, the engine resolves the end by chemistry and only then by distance, so several cases check
+// that the drawing's geometry does not decide. Coordinates are therefore copied from the probes verbatim
+// (1 = one bond length, y points down). Never "tidy" them.
 //
 // Chained steps are applied the way the app does it (MechanismPanel.applyStep): the product is laid out,
 // inserted to the right in the same document, and the next arrows are drawn on that copy.
 import { describe, it, expect } from 'vitest';
 import { createDoc, addAtom, addBond, insertMol, docBounds, docToMol, bondBetween } from '../src/doc/document';
-import { applyArrows, arrowGroups, MechanismResult } from '../src/doc/mechanism';
+import { applyArrows, arrowGroups, placeStep, MechanismResult } from '../src/doc/mechanism';
 import { parseSmiles, writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { layoutMol } from '../src/chem/layout2d';
-import { clean2D } from '../src/chem/clean2d';
 import { perceiveStereo2D } from '../src/chem/stereo2d';
 import { assignCIP } from '../src/chem/cip';
 import { expandAbbreviations } from '../src/chem/abbreviations';
@@ -132,50 +132,32 @@ class Scene {
   }
 
   /**
-   * Applies the arrows like MechanismPanel.applyStep (src/app/panels/mechanism.ts): run the engine, lay the
-   * product out (appLayout), insert it to the right of the reactants in the same document, and move every
-   * label onto the copy so the next step's arrows are drawn on it. Keep in sync with the panel.
+   * Applies the arrows like MechanismPanel.applyStep (src/app/panels/mechanism.ts): run the engine, place the
+   * product with placeStep (the same DOM-free layout the panel uses), insert it into the same document, and
+   * move every label onto the copy so the next step's arrows are drawn on it. r.product becomes the placed
+   * product, so layout assertions measure what the app draws.
    */
   step(arrowIds: number[]): MechanismResult {
     const doc = this.doc;
     const r = applyArrows(doc, arrowIds);
-    if (!r.product.atoms.length) return r;
-    const ids = new Set(r.reactantAtomIds);
-    const b = docBounds(doc, ids)!;
-    let bandMax = b.maxX;
-    const inBand = (y1: number, y2: number) => y2 >= b.minY - 1.5 && y1 <= b.maxY + 1.5;
-    for (const a of doc.atoms.values()) if (!ids.has(a.id) && a.x > b.minX && inBand(a.y, a.y)) bandMax = Math.max(bandMax, a.x);
-    for (const o of doc.arrows.values()) {
-      if (Math.max(o.x1, o.x2) > b.minX && inBand(Math.min(o.y1, o.y2), Math.max(o.y1, o.y2))) bandMax = Math.max(bandMax, o.x1, o.x2);
-    }
-    const startX = bandMax + 0.8;
-    appLayout(r.product);
-    const pb = r.product.bbox();
-    const midY = (b.minY + b.maxY) / 2;
+    const p = placeStep(doc, r);
+    if (!p) return r;
+    // offset of the main species, so atom() keeps placing atoms in the product's own frame
+    const main = p.mol.components().reduce((a, b) => (b.length > a.length ? b : a));
+    const dx = main.reduce((t, i) => t + p.mol.atoms[i].x - r.product.atoms[i].x, 0) / main.length;
+    const dy = main.reduce((t, i) => t + p.mol.atoms[i].y - r.product.atoms[i].y, 0) / main.length;
     const arrowId = doc.nextId++;
-    doc.arrows.set(arrowId, { id: arrowId, type: 'arrow', kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + 2.6, y2: midY });
-    const dx = startX + 3.4 - pb.minX + 0.2;
-    const dy = midY - (pb.minY + pb.maxY) / 2;
-    const { atomIds } = insertMol(doc, r.product, dx, dy);
-    const copyOf = new Map(r.product.atoms.map((a, i) => [a.id, atomIds[i]] as const));
+    doc.arrows.set(arrowId, { id: arrowId, type: 'arrow', ...p.arrow });
+    const { atomIds } = insertMol(doc, p.mol);
+    const copyOf = new Map(p.mol.atoms.map((a, i) => [a.id, atomIds[i]] as const));
     for (const [label, id] of Object.entries(this.L)) {
       const c = copyOf.get(id);
       if (c !== undefined) this.L[label] = c;
     }
     this.ox = dx;
     this.oy = dy;
+    r.product = p.mol;
     return r;
-  }
-}
-
-/** Geometry part of MechanismPanel.applyStep: clean2D the product only when some bond is longer than 1.6. */
-function appLayout(m: Mol): void {
-  const long = m.bonds.some((bd) => Math.hypot(m.atoms[bd.a].x - m.atoms[bd.b].x, m.atoms[bd.a].y - m.atoms[bd.b].y) > 1.6);
-  if (!long) return;
-  try {
-    clean2D(m);
-  } catch {
-    // the panel keeps the raw geometry
   }
 }
 
@@ -1481,7 +1463,7 @@ describe('textbook mechanisms', () => {
   });
 });
 
-// ═════════════════════════ confirmed engine bugs (it.fails until fixed) ═════════════════════════
+// ═════════════════════════ bugs the probes confirmed in the first engine (all fixed) ═════════════════════════
 
 describe('ambiguous arrow ends', () => {
   // Root cause: for a bond → atom arrow whose target is outside the bond (and for a lone pair → remote
@@ -1856,7 +1838,7 @@ describe('dative and hydrogen bonds', () => {
 describe('workflow and malformed input', () => {
   // A malformed step must not be presented as a valid next intermediate: some warning must exist, and it
   // must not be labelled a resonance structure (↔). Where the engine already does that, the test is a
-  // plain it(); where it labels the no-op/broken result as resonance, it is it.fails.
+  // none of them may be offered as a valid intermediate or as a resonance structure.
 
   it('SN2 with the C–Br arrow forgotten is flagged (10-electron carbon)', () => {
     const sc = new Scene();
@@ -2006,9 +1988,7 @@ describe('workflow and malformed input', () => {
 });
 
 describe('layout', () => {
-  // Measured on the product after the app's own placement logic (appLayout mirrors applyStep: clean2D only
-  // when a bond is longer than 1.6, whole product, no fragment separation). If a fix lives in the panel
-  // rather than in the engine, update appLayout()/Scene.step() to match before judging these tests.
+  // Measured on the product as placeStep lays it out (the panel inserts exactly that).
 
   it('hemiacetal ring closure from a zig-zag drawing is tidied into a regular ring', () => {
     const sc = new Scene();
@@ -2018,7 +1998,7 @@ describe('layout', () => {
     expect(closestContact(r.product, 'same fragment')).toBeGreaterThan(1.5);
   });
 
-  it.fails.each([
+  it.each([
     [7, HEPTYL_BROMIDE],
     [9, NONYL_BROMIDE],
   ] as const)('SN2 on a 1-bromoalkane (C%i) with HO− drawn far left: the alcohol is not folded onto itself', (n, coords) => {
@@ -2031,7 +2011,7 @@ describe('layout', () => {
     expect(closestContact(r.product, 'same fragment')).toBeGreaterThan(1.25);
   });
 
-  it.fails('retro-aldol fragments are moved apart instead of staying one bond length apart', () => {
+  it('retro-aldol fragments are moved apart instead of staying one bond length apart', () => {
     const sc = new Scene();
     const m = sc.smiles('m', 'CC([O-])(C)CC=O', ALDOLATE);
     const r = sc.step([sc.arrow(sc.A(m[2]), sc.B(m[1], m[2])), sc.arrow(sc.B(m[1], m[4]), sc.B(m[4], m[5])), sc.arrow(sc.B(m[5], m[6]), sc.A(m[6]))]);
