@@ -4,3 +4,6 @@ dist
 node_modules
 playwright-report
 test-results
+
+# Claude Code agent worktrees
+.claude/worktrees/
