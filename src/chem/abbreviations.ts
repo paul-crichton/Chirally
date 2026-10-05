@@ -8,7 +8,8 @@ export interface AbbrevDef {
   smiles: string;
   /** Human readable description */
   name: string;
-  category: 'alkyl' | 'aryl' | 'functional' | 'protecting' | 'other';
+  /** 'reagent': a whole molecule typed as a label (MeOH); 'ion': a free ion typed with its sign (NO2+). */
+  category: 'alkyl' | 'aryl' | 'functional' | 'protecting' | 'reagent' | 'ion' | 'other';
 }
 
 export const ABBREVIATIONS: Record<string, AbbrevDef> = {
@@ -126,7 +127,78 @@ export const ABBREVIATIONS: Record<string, AbbrevDef> = {
   Tr: { smiles: 'C(c1ccccc1)(c1ccccc1)c1ccccc1', name: 'trityl', category: 'protecting' },
   Trt: { smiles: 'C(c1ccccc1)(c1ccccc1)c1ccccc1', name: 'trityl', category: 'protecting' },
   DMT: { smiles: 'C(c1ccccc1)(c1ccc(OC)cc1)c1ccc(OC)cc1', name: 'dimethoxytrityl', category: 'protecting' },
+  // onium substituents: free (no bond) they are the neutral parent, e.g. NEt3 alone is triethylamine
+  NMe3: { smiles: '[N+](C)(C)C', name: 'trimethylammonio', category: 'functional' },
+  NEt3: { smiles: '[N+](CC)(CC)CC', name: 'triethylammonio', category: 'functional' },
+  SMe2: { smiles: '[S+](C)C', name: 'dimethylsulfonio', category: 'functional' },
+  // reagents typed as formulas (the first atom is the reactive one)
+  MeOH: { smiles: 'OC', name: 'methanol', category: 'reagent' },
+  EtOH: { smiles: 'OCC', name: 'ethanol', category: 'reagent' },
+  iPrOH: { smiles: 'OC(C)C', name: 'isopropanol', category: 'reagent' },
+  tBuOH: { smiles: 'OC(C)(C)C', name: 'tert-butanol', category: 'reagent' },
+  BnOH: { smiles: 'OCc1ccccc1', name: 'benzyl alcohol', category: 'reagent' },
+  PhOH: { smiles: 'Oc1ccccc1', name: 'phenol', category: 'reagent' },
+  MeSH: { smiles: 'SC', name: 'methanethiol', category: 'reagent' },
+  EtSH: { smiles: 'SCC', name: 'ethanethiol', category: 'reagent' },
+  MeNH2: { smiles: 'NC', name: 'methylamine', category: 'reagent' },
+  EtNH2: { smiles: 'NCC', name: 'ethylamine', category: 'reagent' },
+  Me2NH: { smiles: 'N(C)C', name: 'dimethylamine', category: 'reagent' },
+  Et2NH: { smiles: 'N(CC)CC', name: 'diethylamine', category: 'reagent' },
+  Me3N: { smiles: 'N(C)(C)C', name: 'trimethylamine', category: 'reagent' },
+  Et3N: { smiles: 'N(CC)(CC)CC', name: 'triethylamine', category: 'reagent' },
+  Me2S: { smiles: 'S(C)C', name: 'dimethyl sulfide', category: 'reagent' },
+  // free ions typed with their sign; the first atom is the one that reacts
+  'NO+': { smiles: 'N#[O+]', name: 'nitrosonium', category: 'ion' },
+  'NO2+': { smiles: '[N+](=O)=O', name: 'nitronium', category: 'ion' },
+  'NO2-': { smiles: 'N(=O)[O-]', name: 'nitrite', category: 'ion' },
+  'NO3-': { smiles: '[N+](=O)([O-])[O-]', name: 'nitrate', category: 'ion' },
+  'N3-': { smiles: '[N-]=[N+]=[N-]', name: 'azide', category: 'ion' },
+  'SCN-': { smiles: '[S-]C#N', name: 'thiocyanate', category: 'ion' },
+  'OCN-': { smiles: '[O-]C#N', name: 'cyanate', category: 'ion' },
+  'HSO4-': { smiles: 'S(=O)(=O)(O)[O-]', name: 'hydrogen sulfate', category: 'ion' },
+  'HCO3-': { smiles: 'C(=O)(O)[O-]', name: 'bicarbonate', category: 'ion' },
+  'BF4-': { smiles: '[B-](F)(F)(F)F', name: 'tetrafluoroborate', category: 'ion' },
+  'PF6-': { smiles: '[P-](F)(F)(F)(F)(F)F', name: 'hexafluorophosphate', category: 'ion' },
+  'ClO4-': { smiles: 'Cl(=O)(=O)(=O)[O-]', name: 'perchlorate', category: 'ion' },
 };
+
+/** Net charge of a group's template (COO is −1, PPh3 +1, most groups 0). */
+export function templateCharge(g: Mol): number {
+  return g.atoms.reduce((s, a) => s + (a.charge || 0), 0);
+}
+
+/**
+ * Charge of a label's attachment atom once expanded. A label atom's own `charge` is stored as an offset from its
+ * template, so "OMe" with −1 is methoxide and "COO" with 0 is carboxylate. Templates assume one bond to the rest
+ * of the drawing; a free onium label (PPh3, NEt3 with no bond) is the neutral parent molecule.
+ */
+export function attachmentCharge(g: Mol, offset: number, bonded: boolean, label?: string): number {
+  // only substituent groups: an ion typed with its sign (NO2+) is already the free species
+  const freeOnium = !bonded && !(label && labelShowsSign(findAbbreviation(label) ?? label)) && g.atoms[0].charge > 0 && templateCharge(g) > 0;
+  return g.atoms[0].charge - (freeOnium ? 1 : 0) + (offset || 0);
+}
+
+/** True when the label's own text already ends with its charge sign (NO2+, BF4-). */
+export function labelShowsSign(label: string): boolean {
+  return /[+\-]$/.test(label);
+}
+
+/**
+ * The charge drawn after a label: the group's net charge (COO⁻, PPh3⁺, OMe⁻), or only the extra charge when
+ * the label text already carries the sign (an ion such as NO2+).
+ */
+export function labelDisplayCharge(label: string, offset: number, bonded: boolean): number {
+  const g = abbreviationMol(label);
+  if (!g) return offset || 0;
+  if (labelShowsSign(findAbbreviation(label) ?? label)) return offset || 0;
+  return templateCharge(g) - g.atoms[0].charge + attachmentCharge(g, offset, bonded, label);
+}
+
+/** The offset to store for a label typed with net charge `net` (the inverse of labelDisplayCharge for a bonded label). */
+export function labelOffsetForNet(label: string, net: number): number {
+  const g = abbreviationMol(label);
+  return g ? net - templateCharge(g) : net;
+}
 
 /** Case-insensitive lookup helper ("ome" → "OMe"). Exact matches win. */
 export function findAbbreviation(label: string): string | null {
@@ -141,7 +213,8 @@ export function findAbbreviation(label: string): string | null {
  * NHBoc → BocHN, CH2OH → HOH2C.
  */
 export function reverseLabel(label: string): string {
-  const tokens = label.match(/[a-z]*[A-Z][a-z]*\d*|\d+|[+-]/g);
+  // an alkyl prefix (tBu, iPr, nBu, sBu) starts the next group: OtBu → O + tBu, not Ot + Bu
+  const tokens = label.match(/(?:[tins](?=Bu|Pr|Pent|Hex))?[A-Z](?:(?![tins](?:Bu|Pr|Pent|Hex))[a-z])*\d*|\d+|[+-]/g);
   if (!tokens || tokens.join('') !== label) return label;
   // keep trailing charge at end
   const charge: string[] = [];
@@ -244,7 +317,7 @@ export function expandAbbreviations(input: Mol): Mol {
     const newIdx = (gi: number) => (gi === 0 ? i : off + gi - 1);
     for (const b of g.bonds) mol.bonds.push({ ...b, id: -1, a: newIdx(b.a), b: newIdx(b.b) });
     a.el = att.el;
-    a.charge = att.charge + (a.charge || 0); // the label's own charge sits on the attachment atom
+    a.charge = attachmentCharge(g, a.charge, nb.length > 0, a.abbrev); // the label's own charge sits on the attachment atom
     a.isotope = att.isotope;
     if (att.hCount !== undefined) a.hCount = att.hCount;
     else delete a.hCount;

@@ -5,7 +5,7 @@ import { buildScene, Scene, curvedGeometry } from '../render/scene';
 import { drawPrims, ViewTransform } from '../render/draw';
 import { Pt, distToSegment, distToBezier, dist, Box } from '../render/geom';
 import { History } from './history';
-import { Selection, emptySelection, selectedAtomIds, selectionSize, deleteSelection, setAtomLabel, moveSelection, selectionCenter } from './ops';
+import { Selection, emptySelection, selectedAtomIds, selectionSize, deleteSelection, setAtomLabel, moveSelection, selectionCenter, labelText } from './ops';
 import { Hit, PEvent, Tool, ToolId, ToolSettings } from './types';
 import { createTools } from './tools';
 import { implicitH } from '../chem/valence';
@@ -1008,7 +1008,7 @@ export class Editor {
   editAtomLabel(atomId: number, initial?: string): void {
     const a = this.doc.atoms.get(atomId);
     if (!a) return;
-    const cur = initial ?? (a.abbrev ?? a.alias ?? (a.el === 'C' && !a.charge ? '' : labelTextOf(this, atomId)));
+    const cur = initial ?? (a.abbrev || a.alias || a.el !== 'C' || a.charge ? labelTextOf(this, atomId) : '');
     this.hiddenLabels.add(atomId);
     this.rev++;
     this.requestRender();
@@ -1178,8 +1178,8 @@ export class Editor {
 /** Text shown in the inline editor for an atom label. */
 export function labelTextOf(ed: Editor, atomId: number): string {
   const a = ed.doc.atoms.get(atomId)!;
-  if (a.abbrev) return a.abbrev;
-  if (a.alias) return a.alias;
+  // labels keep their charge so that confirming the text unchanged keeps it too
+  if (a.abbrev || a.alias) return labelText(a, [...ed.doc.bonds.values()].some((b) => b.a === atomId || b.b === atomId));
   let s = (a.isotope ? a.isotope : '') + a.el;
   const scene = ed.getScene();
   const h = scene.hCount.get(atomId) ?? 0;

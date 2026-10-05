@@ -7,7 +7,7 @@ import { perceiveStereo2D, assignWedgesFromSpecs, isPotentialStereocenter } from
 import { tidyProduct, arrangeRow } from './stepLayout';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit, bondValence } from '../chem/valence';
 import { kekulize } from '../chem/aromaticity';
-import { abbreviationMol, expandAbbreviations } from '../chem/abbreviations';
+import { abbreviationMol, expandAbbreviations, attachmentCharge } from '../chem/abbreviations';
 import { valenceElectrons, element } from '../chem/elements';
 import { writeSmiles, suppressHydrogens } from '../chem/smiles';
 
@@ -167,13 +167,13 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   // shorthand labels (OMe, CO2H, Ph, …) take part as the atoms they stand for; the attachment atom keeps the
   // label's index (so arrows still find it) and the label groups the arrows leave alone are labels again afterwards
   const mol = expandAbbreviations(drawn);
-  const labelGroups: { at: number; label: string; members: number[]; attachCharge: number }[] = [];
+  const labelGroups: { at: number; label: string; members: number[] }[] = [];
   drawn.atoms.forEach((a, i) => {
     const g = a.abbrev ? abbreviationMol(a.abbrev) : null;
     if (!g) return;
     const members = [i];
     for (let k = drawn.atoms.length; k < mol.atoms.length; k++) if (mol.atoms[k].id === a.id) members.push(k);
-    labelGroups.push({ at: i, label: a.abbrev!, members, attachCharge: g.atoms[0].charge });
+    labelGroups.push({ at: i, label: a.abbrev!, members });
   });
   // an arrow at the H of an atom's label acts on one of its implicit hydrogens: that H becomes a real atom for the
   // step (-1: the atom has none) and is folded back into the implicit H count of whichever atom holds it afterwards
@@ -204,9 +204,11 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   // start from as double bonds where possible; rings no arrow touches are drawn delocalised again afterwards
   const aromatic = mol.bonds.map((b) => b.order === 1.5);
   const aromaticSystems: { keys: string[]; atoms: number[] }[] = [];
+  let kekuleFailed = false;
   if (aromatic.some(Boolean)) {
     const fromBonds = arrows.flatMap((c) => (c.from.type === 'bond' ? [c.from.id] : [])).map((id) => mol.bonds.findIndex((b) => b.id === id));
-    if (!kekuliseForArrows(mol, aromatic, fromBonds))
+    kekuleFailed = !kekuliseForArrows(mol, aromatic, fromBonds);
+    if (kekuleFailed)
       error('This ring could not be given alternating double bonds — draw it in Kekulé form', mol.atoms.filter((_, i) => mol.adj[i].some((bi) => aromatic[bi])).map((a) => a.id));
     // connected sets of delocalised bonds
     const seen = new Set<number>();
@@ -230,7 +232,8 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   const N0 = mol.atoms.map((_, i) => nonBondingElectrons(mol, i));
   // stereocentres as drawn (wedges and coordinates)
   const stereo0 = perceiveStereo2D(mol).tetra;
-  // generic atoms (E⁺, Nu⁻, R) that arrows touch count as one-bond atoms: E⁺ has no electrons to give, Nu⁻ a lone pair
+  // generic atoms (E⁺, Nu⁻, R) that arrows touch count as one-bond groups: E⁺ has no electrons to give; Nu⁻ and the
+  // neutral donors Nu:, B:, Base have a lone pair (a neutral one is Nu⁺ after giving it)
   const pseudoTouched = new Set<number>();
   for (const c of arrows)
     for (const an of [c.from, c.to]) {
@@ -241,7 +244,14 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
         if (i !== undefined && !mol.atoms[i].abbrev && !element(mol.atoms[i].el)) pseudoTouched.add(i);
       }
     }
-  for (const i of pseudoTouched) N0[i] = Math.max(0, 1 - mol.atoms[i].charge - bondOrderSum(mol, i));
+  const genericV = new Map<number, number>();
+  for (const i of pseudoTouched) {
+    const a = mol.atoms[i];
+    const B = bondOrderSum(mol, i);
+    const donor = a.charge < 0 || /^(Nu|Nuc|B|Base)$|:$|^:/.test(a.alias ?? '');
+    N0[i] = donor ? Math.max(0, 2 - B) : Math.max(0, 1 - a.charge - B);
+    genericV.set(i, N0[i] + B + a.charge);
+  }
   const charge0 = mol.atoms.reduce((s, a) => s + (a.charge || 0), 0);
   // bond electrons keyed by "i,j" (i<j)
   const key = (i: number, j: number) => (i < j ? `${i},${j}` : `${j},${i}`);
@@ -392,12 +402,22 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     plans.push({ k, src, dest });
   }
   if (!arrows.length) error('No electron-pushing arrows to apply');
+  // arrows cannot be drawn inside a label, so a label atom that receives a new bond may push one of its group's own
+  // π bonds onto the more electronegative outer atom (a nucleophile attacking NO2+ or NO+ written as labels); the
+  // shift is only used when the step is invalid without it
+  const shifts: { at: number; to: number }[] = [];
+  for (const g of labelGroups) {
+    const receives = plans.some((p) => (p.dest.t === 'bond' && (p.dest.a === g.at || p.dest.b === g.at)) || (p.dest.t === 'pick' && (p.dest.base === g.at || p.dest.ends.includes(g.at))));
+    let to = -1;
+    for (const k of g.members.slice(1)) if (order0(g.at, k) >= 2 && (to < 0 || en(k) > en(to))) to = k;
+    if (receives && to >= 0) shifts.push({ at: g.at, to });
+  }
 
   const fishhooks = plans.some((p) => p.k === 1);
 
   // ── electron bookkeeping for one reading of the arrows ──
   const sig = (m: Map<string, number>) => [...m.entries()].filter(([, e]) => e > 0).map(([kk]) => kk).sort().join('|');
-  const simulate = (picks: number[]): Outcome => {
+  const simulate = (picks: number[], shiftOn: boolean[] = []): Outcome => {
     const warnings: MechanismWarning[] = [];
     const err = (message: string, atomIds?: number[]) => warnings.push({ message, atomIds, level: 'error' });
     const summary: string[] = [];
@@ -421,6 +441,11 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       else if ('atom' in src) N[src.atom] += k;
       else addBondE(src.bond[0], src.bond[1], k);
     }
+    shifts.forEach((sh, q) => {
+      if (!shiftOn[q]) return;
+      addBondE(sh.at, sh.to, -2);
+      N[sh.to] += 2;
+    });
     const changed =
       brokenZero.size > 0 ||
       N.some((v, i) => v !== N0[i]) ||
@@ -433,6 +458,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     for (const [kk, e] of be) {
       const [i, j] = kk.split(',').map(Number);
       let ee = e;
+      if (ee % 2 !== 0 && kekuleFailed && original.get(kk)?.order === 1.5) ee -= 1; // already reported as a Kekulé problem
       if (ee % 2 !== 0) {
         err(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the ${fishhooks ? 'fishhook arrows' : 'arrows'}`, [mol.atoms[i].id, mol.atoms[j].id]);
         ee -= 1;
@@ -471,6 +497,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       }
     }
     for (const [kk, b] of zeroBonds) {
+      if (pairs.some(([i, j]) => key(i, j) === kk)) continue; // the arrows made it a covalent bond
       if (brokenZero.has(kk)) {
         summary.push(`broke ${atomName(mol, b.a)}–${atomName(mol, b.b)} ${b.style === 'dative' ? 'dative' : 'hydrogen'} bond`);
         continue;
@@ -485,7 +512,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       const a = product.atoms[i];
       const generic = pseudoTouched.has(i);
       if (a.abbrev || (!element(a.el) && !generic)) continue;
-      const V = generic ? 1 : valenceElectrons(a.el);
+      const V = generic ? genericV.get(i)! : valenceElectrons(a.el);
       const B = bondOrderSum(product, i) + H[i];
       const Ni = Math.max(0, N[i]);
       if (N[i] < 0) err(`${atomName(mol, i)} gave away more electrons than it had`, [a.id]);
@@ -504,7 +531,9 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     if (charge1 !== charge0) err(`The total charge would change from ${signed(charge0)} to ${signed(charge1)} — electrons went missing or appeared`);
     // rings drawn delocalised that the arrows left alone are drawn delocalised again
     for (const sys of aromaticSystems) {
-      if (sys.atoms.some((i) => N[i] !== N0[i]) || sys.keys.some((kk) => (be.get(kk) ?? 0) !== (before.get(kk) ?? 0))) continue;
+      // untouched: same electrons on its atoms and the same bonds around them (a new σ bond makes a ring carbon sp3)
+      const around = [...new Set([...before.keys(), ...be.keys()])].filter((kk) => kk.split(',').some((x) => sys.atoms.includes(+x)));
+      if (sys.atoms.some((i) => N[i] !== N0[i]) || around.some((kk) => Math.max(0, be.get(kk) ?? 0) !== (before.get(kk) ?? 0))) continue;
       for (const kk of sys.keys) {
         const [i, j] = kk.split(',').map(Number);
         const bi = product.bondBetween(i, j);
@@ -533,8 +562,12 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
         const inv: TetraSpec = { center: c, nbrs: t.nbrs.map((x) => (x === lost[0] ? gained[0] : x)) as TetraSpec['nbrs'], ccw: !t.ccw };
         tetra.push(inv);
         redraw.push(inv);
-      } else if (isPotentialStereocenter(product, c))
-        warnings.push({ message: `The configuration drawn at ${atomName(mol, c)} is not carried through this step`, atomIds: [mol.atoms[c].id], level: 'warning' });
+      } else {
+        // the drawn configuration no longer applies (e.g. the centre became planar): no wedge from it
+        for (const b of product.bonds) if (b.a === c && (b.style === 'wedge' || b.style === 'hash')) b.style = 'plain';
+        if (isPotentialStereocenter(product, c))
+          warnings.push({ message: `The configuration drawn at ${atomName(mol, c)} is not carried through this step`, atomIds: [mol.atoms[c].id], level: 'warning' });
+      }
     }
     if (redraw.length) {
       product.tetra = redraw;
@@ -553,31 +586,33 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       holder.hCount = (holder.hCount ?? implicitH(product, nb[0])) + 1;
       drop.add(hi);
     }
-    // label groups the arrows left unchanged become labels again (with the charge their attachment atom gained)
+    // label groups the arrows left as some label's group become that label again (with the charge their attachment atom
+    // gained): the label itself, or the substituent an ion becomes once bonded (NO2+ → NO2)
     const expanded: string[] = [];
     for (const g of labelGroups) {
       const inGroup = new Set(g.members);
-      const inner = g.members.slice(1);
-      const pairKeys = [...new Set([...before.keys(), ...be.keys()])].filter((kk) => kk.split(',').every((x) => inGroup.has(+x)));
-      const intact =
-        inner.every((k) => N[k] === N0[k]) &&
-        pairKeys.every((kk) => Math.max(0, be.get(kk) ?? 0) === (before.get(kk) ?? 0)) &&
-        product.bonds.every((b) => !(inner.includes(b.a) && !inGroup.has(b.b)) && !(inner.includes(b.b) && !inGroup.has(b.a)));
-      if (!intact) {
+      const external = product.bonds.filter((b) => inGroup.has(b.a) !== inGroup.has(b.b));
+      const label = external.every((b) => b.a === g.at || b.b === g.at)
+        ? [g.label, g.label.replace(/[+-]$/, '')].find((l) => {
+            const T = abbreviationMol(l);
+            return !!T && formsTemplate(product, g.members, T, external.map((b) => bondValence(b.order, b.style)));
+          })
+        : undefined;
+      if (!label) {
         expanded.push(g.label);
         continue;
       }
       const a = product.atoms[g.at];
-      a.charge -= g.attachCharge;
+      a.charge -= attachmentCharge(abbreviationMol(label)!, 0, external.length > 0, label);
       a.el = drawn.atoms[g.at].el;
-      a.abbrev = g.label;
+      a.abbrev = label;
       delete a.hCount;
-      inner.forEach((k) => drop.add(k));
+      g.members.slice(1).forEach((k) => drop.add(k));
     }
     for (const label of expanded) warnings.push({ message: `The ${label} label is drawn in full because the arrows change atoms inside it`, level: 'warning' });
     const errors = warnings.filter((w) => w.level === 'error').length + fixed.filter((w) => w.level === 'error').length;
     // a failed or empty step is never a resonance structure
-    const resonance = errors === 0 && changed && sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
+    const resonance = errors === 0 && changed && !brokenZero.size && sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
     const out = drop.size ? withoutAtoms(product, drop) : product;
     // keep H counts implicit wherever the valence rules give the same number
     out.atoms.forEach((a, i) => {
@@ -589,23 +624,33 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     return { product: out, warnings, summary, changed, resonance, errors };
   };
 
-  // ── choose the reading of ambiguous arrows ──
+  // ── choose the reading of ambiguous arrows (and whether labels shift a π bond) ──
   const pickPlans = plans.map((p) => p.dest).filter((d): d is Extract<Destination, { t: 'pick' }> => d.t === 'pick');
   const preferred = pickPlans.map((d) => d.prefer);
   const alt = (d: Extract<Destination, { t: 'pick' }>, end: number) => (end === d.ends[0] ? d.ends[1] : d.ends[0]);
-  const cost = (picks: number[]) => picks.reduce((s, e, q) => s + (e !== pickPlans[q].prefer ? pickPlans[q].weight : 0) + (e !== pickPlans[q].nearest ? 0.5 : 0), 0);
+  const nPick = pickPlans.length;
+  const nBits = nPick + shifts.length;
+  const decode = (mask: number) => ({
+    picks: preferred.map((e, q) => (mask & (1 << q) ? alt(pickPlans[q], e) : e)),
+    shiftOn: shifts.map((_, q) => !!(mask & (1 << (nPick + q)))),
+  });
+  const cost = (picks: number[], shiftOn: boolean[]) =>
+    picks.reduce((s, e, q) => s + (e !== pickPlans[q].prefer ? pickPlans[q].weight : 0) + (e !== pickPlans[q].nearest ? 0.5 : 0), 0) +
+    shiftOn.filter(Boolean).length * 2.5;
   let bestPicks = preferred;
-  let best = simulate(preferred);
-  if (pickPlans.length && pickPlans.length <= 8) {
-    let bestScore = best.errors * 1000 + cost(preferred);
-    for (let mask = 1; mask < 1 << pickPlans.length; mask++) {
-      const picks = preferred.map((e, q) => (mask & (1 << q) ? alt(pickPlans[q], e) : e));
-      const o = simulate(picks);
-      const score = o.errors * 1000 + cost(picks);
+  let bestShifts = shifts.map(() => false);
+  let best = simulate(bestPicks, bestShifts);
+  if (nBits && nBits <= 10) {
+    let bestScore = best.errors * 1000 + cost(bestPicks, bestShifts);
+    for (let mask = 1; mask < 1 << nBits; mask++) {
+      const { picks, shiftOn } = decode(mask);
+      const o = simulate(picks, shiftOn);
+      const score = o.errors * 1000 + cost(picks, shiftOn);
       if (score < bestScore) {
         bestScore = score;
         best = o;
         bestPicks = picks;
+        bestShifts = shiftOn;
       }
     }
   }
@@ -615,7 +660,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     if (d.weight > 0 || best.errors) return;
     const picks = [...bestPicks];
     picks[q] = alt(d, picks[q]);
-    const other = simulate(picks);
+    const other = simulate(picks, bestShifts);
     const a = smilesOf(other.product);
     if (other.errors || (a !== null && a === smilesOf(best.product))) return;
     const [x, y] = [bestPicks[q], picks[q]];
@@ -643,7 +688,13 @@ function kekuliseForArrows(mol: Mol, aromatic: boolean[], prefer: number[]): boo
     if (aromatic[bi]) atoms[b.a] = atoms[b.b] = true;
   });
   atoms.forEach((f, i) => {
-    if (f && mol.atoms[i].hCount === undefined) mol.atoms[i].hCount = implicitH(mol, i);
+    const a = mol.atoms[i];
+    if (!f || a.hCount !== undefined) return;
+    if (a.el === 'C' && a.charge) {
+      // a charged ring carbon (cyclopentadienyl anion, tropylium cation) has no π bond of its own: σ bonds + H = 3
+      const sigma = mol.adj[i].reduce((sum, bi) => sum + (aromatic[bi] ? 1 : bondValence(mol.bonds[bi].order, mol.bonds[bi].style)), 0);
+      a.hCount = Math.max(0, 3 - sigma);
+    } else a.hCount = implicitH(mol, i);
   });
   const attempt = (doubles: number[]): boolean => {
     for (const bi of doubles) mol.bonds[bi].order = 2;
@@ -656,6 +707,60 @@ function kekuliseForArrows(mol: Mol, aromatic: boolean[], prefer: number[]): boo
 }
 
 const signed = (c: number) => (c > 0 ? `+${c}` : String(c));
+
+/**
+ * Whether product atoms `members` (attachment first) are template T: a one-to-one match of T's atoms onto them with
+ * the same elements, bonds, charges, radicals and hydrogens (equivalent atoms such as the two O of a nitro group may
+ * swap), and an attachment atom that gets back exactly its hydrogens when the label is expanded again with its
+ * charge and its bonds (`external`, their orders) to the rest of the product.
+ */
+function formsTemplate(p: Mol, members: number[], T: Mol, external: number[]): boolean {
+  if (T.atoms.length !== members.length || p.atoms[members[0]].el !== T.atoms[0].el) return false;
+  const inGroup = new Set(members);
+  const order = (m: Mol, i: number, j: number) => {
+    const bi = m.bondBetween(i, j);
+    return bi >= 0 ? m.bonds[bi].order : 0;
+  };
+  const same = (t: number, q: number) => {
+    const a = p.atoms[q], b = T.atoms[t];
+    return a.el === b.el && (a.charge || 0) === (b.charge || 0) && (a.radical || 0) === (b.radical || 0) && implicitH(p, q) === implicitH(T, t);
+  };
+  // template atoms in breadth-first order from the attachment atom, each placed next to an already matched neighbour
+  const seq = [0];
+  for (let k = 0; k < seq.length; k++) for (const w of T.neighbors(seq[k])) if (!seq.includes(w)) seq.push(w);
+  if (seq.length !== T.atoms.length) return false;
+  const map = new Array<number>(T.atoms.length).fill(-1);
+  const used = new Set<number>();
+  map[0] = members[0];
+  used.add(members[0]);
+  const place = (k: number): boolean => {
+    if (k === seq.length) return true;
+    const t = seq[k];
+    const anchor = T.neighbors(t).find((w) => map[w] >= 0)!;
+    for (const q of p.neighbors(map[anchor])) {
+      if (!inGroup.has(q) || used.has(q) || !same(t, q)) continue;
+      // every bond to an already matched template atom must be there with the same order, and no extra ones
+      if (seq.slice(0, k).some((w) => order(T, t, w) !== order(p, q, map[w]))) continue;
+      map[t] = q;
+      used.add(q);
+      if (place(k + 1)) return true;
+      map[t] = -1;
+      used.delete(q);
+    }
+    return false;
+  };
+  if (!place(1)) return false;
+  const att = p.atoms[members[0]];
+  const test = T.clone();
+  test.atoms[0].charge = att.charge;
+  if (att.radical) test.atoms[0].radical = att.radical;
+  else delete test.atoms[0].radical;
+  for (const o of external) {
+    const d = test.addAtom({ el: 'C', hCount: 0 });
+    test.addBond(0, d, o);
+  }
+  return implicitH(test, 0) === implicitH(p, members[0]);
+}
 
 /** A copy of `m` without the given atoms (and their bonds). */
 function withoutAtoms(m: Mol, drop: Set<number>): Mol {

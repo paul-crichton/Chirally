@@ -6,7 +6,7 @@ import { Mol } from '../chem/mol';
 import { implicitH, hasValenceError, lonePairCount } from '../chem/valence';
 import { perceiveRings, RingInfo } from '../chem/rings';
 import { perceiveAromaticity } from '../chem/aromaticity';
-import { reverseLabel } from '../chem/abbreviations';
+import { reverseLabel, labelDisplayCharge } from '../chem/abbreviations';
 import { labelColor, element } from '../chem/elements';
 import { Box, Pt, clipSegment, norm, perp, sub, add, mul, len, dot, lerp, angleOf, fromAngle, cross, bezierTangent } from './geom';
 import { measureText, richLines, TextRun, SCRIPT_SCALE, SUB_SHIFT, SUP_SHIFT, formulaRuns } from './text';
@@ -504,9 +504,10 @@ function layoutLabel(mol: Mol, i: number, dirs: Pt[], h: number, st: DocStyle): 
       runs.push({ x, y, text: r.text, size });
       x += widths[k];
     });
-    if (a.charge) {
-      // charge after the label: OMe⁻, E⁺
-      const txt = chargeText(a.charge);
+    const shown = a.abbrev ? labelDisplayCharge(a.abbrev, a.charge, dirs.length > 0) : a.charge;
+    if (shown) {
+      // charge after the label: OMe⁻, COO⁻, PPh3⁺, E⁺
+      const txt = chargeText(shown);
       const size = fs * SCRIPT_SCALE;
       runs.push({ x, y: base - fs * SUP_SHIFT, text: txt, size });
       x += measureText(txt, size, fam);

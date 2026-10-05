@@ -4,7 +4,7 @@ import { parseSmiles, writeSmiles, suppressHydrogens, parseReactionSmiles } from
 import { layoutMol } from '../chem/layout2d';
 import { clean2D } from '../chem/clean2d';
 import { perceiveStereo2D, assignWedgesFromSpecs, explicitFusionHydrogens } from '../chem/stereo2d';
-import { expandAbbreviations, abbreviationMol } from '../chem/abbreviations';
+import { expandAbbreviations, abbreviationMol, attachmentCharge } from '../chem/abbreviations';
 import { computeFormula, FormulaInfo } from '../chem/formula';
 import { computeProperties, MolProperties } from '../chem/properties';
 import { nameMolecule } from '../chem/iupac';
@@ -194,7 +194,8 @@ export function expandLabel(doc: ChemDoc, atomId: number): boolean {
   for (let k = 1; k < g.atoms.length; k++) mol.atoms.push({ ...g.atoms[k], id: -k, x: 0, y: 0 });
   for (const b of g.bonds) mol.bonds.push({ ...b, id: -1, a: b.a === 0 ? ai : off + b.a - 1, b: b.b === 0 ? ai : off + b.b - 1 });
   const att = g.atoms[0];
-  const charge = att.charge + (a.charge || 0); // the label's own charge sits on the attachment atom
+  // the label's own charge sits on the attachment atom (a free onium label is the neutral parent)
+  const charge = attachmentCharge(g, a.charge, [...doc.bonds.values()].some((b) => b.a === atomId || b.b === atomId), a.abbrev);
   mol.atoms[ai] = { ...mol.atoms[ai], el: att.el, charge, hCount: att.hCount, abbrev: undefined };
   mol.invalidate();
   const fixed = new Set<number>();

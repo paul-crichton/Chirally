@@ -385,13 +385,24 @@ describe('labels, generic atoms and charge conservation', () => {
     expect(expanded(r).split('.').sort()).toEqual([canon('CC(=O)O'), canon('C[O-]')].sort());
   });
 
-  it('points out that arrows cannot reach inside a label', () => {
+  it('a nucleophile attacking a label pushes the label’s own C=O onto its oxygen', () => {
     const doc = createDoc();
     const [me] = put(doc, 'C', 0);
     const co2h = labelled(doc, 'CO2H', 1, 0);
     addBond(doc, me, co2h);
     const o = addAtom(doc, { el: 'O', x: 1, y: -2, charge: -1 }).id;
     const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(co2h))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r)).toBe(canon('CC(O)(O)[O-]'));
+  });
+
+  it('points out that arrows cannot reach inside a label', () => {
+    const doc = createDoc();
+    const [me] = put(doc, 'C', 0);
+    const lab = labelled(doc, 'CH2OH', 1, 0);
+    addBond(doc, me, lab);
+    const o = addAtom(doc, { el: 'O', x: 1, y: -2, charge: -1 }).id;
+    const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(lab))]);
     expect(r.ok).toBe(false);
     expect(r.warnings.some((w) => /expand it/.test(w.message))).toBe(true);
   });
@@ -491,6 +502,174 @@ describe('stereochemistry through a step', () => {
     const r = applyArrows(doc, [arrow(doc, atomA(L.O), atomA(L.H))]);
     const kept = r.product.bonds.find((b) => b.id === db.id)!;
     expect(kept).toMatchObject({ order: 2, dbPos: 'left', color: '#e03131' });
+  });
+});
+
+describe('review fixes: bonds, stereo, labels and generic atoms', () => {
+  const labelled = (doc: ChemDoc, label: string, x: number, y: number) => {
+    const a = addAtom(doc, { el: 'C', x, y });
+    Object.assign(a, parseAtomLabel(label));
+    return a.id;
+  };
+  const expanded = (r: { product: Mol }) => writeSmiles(suppressHydrogens(expandAbbreviations(r.product)));
+  const H = (id: number): Anchor => ({ type: 'atom', id, h: true });
+
+  it('a proton moved along a drawn hydrogen bond leaves one covalent bond', () => {
+    const doc = createDoc();
+    const L = draw(doc, { O1: ['O', 0, 0, -1], H: ['H', 1.2, 0], O2: ['O', 2.2, 0] }, [['H', 'O2']]);
+    addBond(doc, L.O1, L.H, 0, 'hbond');
+    const r = applyArrows(doc, [arrow(doc, atomA(L.O1), { type: 'bond', id: bondId(doc, L.O1, L.H) }), arrow(doc, { type: 'bond', id: bondId(doc, L.H, L.O2) }, atomA(L.O2))]);
+    expect(r.ok).toBe(true);
+    expect(r.product.bonds.filter((b) => b.style === 'hbond')).toEqual([]);
+    expect(productOf(r).split('.').sort()).toEqual(['O', '[OH-]'].sort());
+  });
+
+  it('breaking only a dative bond is a reaction step, not resonance', () => {
+    const doc = createDoc();
+    const L = draw(doc, { P: ['P', 0, 0], A: ['C', -1, 0], B: ['C', 0, 1], C: ['C', 0, -1], Pd: ['Pd', 1.5, 0] }, [['P', 'A'], ['P', 'B'], ['P', 'C']]);
+    addBond(doc, L.P, L.Pd, 1, 'dative');
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, L.P, L.Pd) }, atomA(L.P))]);
+    expect(r.ok).toBe(true);
+    expect(r.resonance).toBe(false);
+  });
+
+  it('a stereocentre that becomes a planar cation loses its wedge', () => {
+    const doc = createDoc();
+    const L = draw(doc, { C2: ['C', 0, 0], C3: ['C', 0.866, 0.5], C4: ['C', 1.732, 0], Br: ['Br', 0, -1], C1: ['C', -0.866, 0.5] }, [['C2', 'C3'], ['C3', 'C4'], ['C2', 'Br']]);
+    addBond(doc, L.C2, L.C1, 1, 'wedge');
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, L.C2, L.Br) }, atomA(L.Br))]);
+    expect(r.product.bonds.some((b) => b.style === 'wedge' || b.style === 'hash')).toBe(false);
+  });
+
+  it('a condensed OCH3⁻ label protonated through a label H becomes methanol', () => {
+    const doc = createDoc();
+    const och3 = labelled(doc, 'OCH3-', 0, 0);
+    const h3o = labelled(doc, 'H3O+', 3, 0);
+    const r = applyArrows(doc, [arrow(doc, atomA(och3), H(h3o)), arrow(doc, H(h3o), atomA(h3o))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r).split('.').sort()).toEqual(['CO', 'O'].sort());
+  });
+
+  it('an OMe label whose oxygen loses its bond electrons is drawn in full, without invented hydrogens', () => {
+    const doc = createDoc();
+    const [c] = put(doc, 'C', 0);
+    const ome = labelled(doc, 'OMe', 1, 0);
+    addBond(doc, c, ome);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, c, ome) }, atomA(c))]);
+    expect(expanded(r).split('.').sort()).toEqual(['C[O+]', '[CH3-]'].sort());
+  });
+
+  it('a free PPh3 label is triphenylphosphine and alkylates as a nucleophile', () => {
+    const doc = createDoc();
+    const p = labelled(doc, 'PPh3', 0, 0);
+    const [c, i] = put(doc, 'CI', 2);
+    const r = applyArrows(doc, [arrow(doc, atomA(p), atomA(c)), arrow(doc, { type: 'bond', id: bondId(doc, c, i) }, atomA(i))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r).split('.').sort()).toEqual([canon('C[P+](c1ccccc1)(c1ccccc1)c1ccccc1'), '[I-]'].sort());
+    expect(r.product.atoms.find((a) => a.id === p)).toMatchObject({ abbrev: 'PPh3', charge: 0 }); // shown as PPh3⁺ once bonded
+  });
+
+  it('a carboxylate written as COO⁻ counts its charge once', () => {
+    const doc = createDoc();
+    const L = draw(doc, { N: ['N', 0, 0], C: ['C', 1, 0], Hp: ['H', -1.5, 0, 1] }, [['N', 'C']]);
+    const coo = labelled(doc, 'COO-', 2, 0);
+    addBond(doc, L.C, coo);
+    const r = applyArrows(doc, [arrow(doc, atomA(L.N), atomA(L.Hp))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r)).toBe(canon('[NH3+]CC(=O)[O-]'));
+  });
+
+  it('neutral generic nucleophiles and bases have a lone pair to give', () => {
+    const doc = createDoc();
+    const nu = labelled(doc, 'Nu', 0, 0);
+    const [c, br] = put(doc, 'CBr', 2);
+    const r = applyArrows(doc, [arrow(doc, atomA(nu), atomA(c)), arrow(doc, { type: 'bond', id: bondId(doc, c, br) }, atomA(br))]);
+    expect(r.ok).toBe(true);
+    expect(r.product.atoms.find((a) => a.id === nu)!.charge).toBe(1);
+
+    const doc2 = createDoc();
+    const b = labelled(doc2, 'B:', 0, 0);
+    const L = draw(doc2, { Ca: ['C', 2, 0], H: ['H', 1.2, -0.6], C: ['C', 3, 0], O: ['O', 3.5, -0.87], M: ['C', 3.5, 0.87] }, [['Ca', 'H'], ['Ca', 'C'], ['C', 'O', 2], ['C', 'M']]);
+    const r2 = applyArrows(doc2, [
+      arrow(doc2, atomA(b), atomA(L.H)),
+      arrow(doc2, { type: 'bond', id: bondId(doc2, L.Ca, L.H) }, { type: 'bond', id: bondId(doc2, L.Ca, L.C) }),
+      arrow(doc2, { type: 'bond', id: bondId(doc2, L.C, L.O) }, atomA(L.O)),
+    ]);
+    expect(r2.ok).toBe(true);
+  });
+
+  it('nitration with an NO2⁺ label gives the nitro arenium and a nitro label', () => {
+    const doc = createDoc();
+    const ids = put(doc, 'C1=CC=CC=C1', 0);
+    const no2 = labelled(doc, 'NO2+', 0, -2);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, ids[0], ids[1]) }, atomA(no2))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r)).toBe(canon('[O-][N+](=O)C1C=CC=C[CH+]1'));
+    expect(r.product.atoms.find((a) => a.id === no2)).toMatchObject({ abbrev: 'NO2' });
+  });
+
+  it('N-nitrosation with an NO⁺ label gives the N-nitrosammonium', () => {
+    const doc = createDoc();
+    const [m1, n] = put(doc, 'CNC', 0);
+    const no = labelled(doc, 'NO+', 1, -2);
+    const r = applyArrows(doc, [arrow(doc, atomA(n), atomA(no))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r)).toBe(canon('C[NH+](C)N=O'));
+    void m1;
+  });
+
+  it('nitrite (NO2⁻ label) alkylated on nitrogen gives a nitro group', () => {
+    const doc = createDoc();
+    const no2 = labelled(doc, 'NO2-', 0, 0);
+    const [c, br] = put(doc, 'CBr', 2);
+    const r = applyArrows(doc, [arrow(doc, atomA(no2), atomA(c)), arrow(doc, { type: 'bond', id: bondId(doc, c, br) }, atomA(br))]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r).split('.').sort()).toEqual([canon('C[N+](=O)[O-]'), '[Br-]'].sort());
+  });
+
+  it('thia-Michael with a typed MeS⁻ (methanethiolate, not mesityl)', () => {
+    const doc = createDoc();
+    const ids = put(doc, 'C=CC(=O)OC', 0);
+    const s1 = labelled(doc, 'MeS-', 0, -2);
+    const r = applyArrows(doc, [
+      arrow(doc, atomA(s1), atomA(ids[0])),
+      arrow(doc, { type: 'bond', id: bondId(doc, ids[0], ids[1]) }, { type: 'bond', id: bondId(doc, ids[1], ids[2]) }),
+      arrow(doc, { type: 'bond', id: bondId(doc, ids[2], ids[3]) }, atomA(ids[3])),
+    ]);
+    expect(r.ok).toBe(true);
+    expect(expanded(r)).toBe(canon('CSCC=C([O-])OC'));
+  });
+
+  it('charged rings drawn delocalised: cyclopentadienyl anion and tropylium', () => {
+    const ring = (doc: ChemDoc, n: number, charge: number) => {
+      const ids = [...Array(n)].map((_, k) => addAtom(doc, { el: 'C', x: Math.cos((k * 2 * Math.PI) / n), y: Math.sin((k * 2 * Math.PI) / n), charge: k === 0 ? charge : 0 }).id);
+      ids.forEach((id, k) => addBond(doc, id, ids[(k + 1) % n], 1.5));
+      return ids;
+    };
+    const doc = createDoc();
+    const cp = ring(doc, 5, -1);
+    const h = addAtom(doc, { el: 'H', x: 3, y: 0, charge: 1 }).id;
+    const r = applyArrows(doc, [arrow(doc, atomA(cp[0]), atomA(h))]);
+    expect(r.warnings).toEqual([]);
+    expect(productOf(r)).toBe(canon('C1C=CC=C1'));
+
+    const doc2 = createDoc();
+    const tr = ring(doc2, 7, 1);
+    const o = addAtom(doc2, { el: 'O', x: 3, y: 0, charge: -1 }).id;
+    const r2 = applyArrows(doc2, [arrow(doc2, atomA(o), atomA(tr[0]))]);
+    expect(r2.warnings).toEqual([]);
+    expect(productOf(r2)).toBe(canon('OC1C=CC=CC=C1'));
+  });
+
+  it('a ring that cannot be given alternating bonds gives one error, not one per bond', () => {
+    const doc = createDoc();
+    const ids = [...Array(5)].map((_, k) => addAtom(doc, { el: 'C', x: Math.cos((k * 2 * Math.PI) / 5), y: Math.sin((k * 2 * Math.PI) / 5) }).id);
+    ids.forEach((id, k) => addBond(doc, id, ids[(k + 1) % 5], 1.5));
+    const o = addAtom(doc, { el: 'O', x: 3, y: 0, charge: -1 }).id;
+    const hp = addAtom(doc, { el: 'H', x: 2, y: 0, charge: 1 }).id;
+    const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(hp)), arrow(doc, atomA(ids[0]), atomA(ids[0]))]);
+    expect(r.warnings.filter((w) => /Odd number/.test(w.message))).toEqual([]);
+    expect(r.warnings.filter((w) => /Kekulé/.test(w.message)).length).toBe(1);
   });
 });
 

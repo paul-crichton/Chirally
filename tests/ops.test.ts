@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { createDoc, addAtom, addBond, docToMol, adjacency } from '../src/doc/document';
 import {
   idealBondDirection, placeRing, fuseRingOnBond, attachRingToAtom, deleteSelection, mergeAtoms, parseAtomLabel,
-  flipSelection, emptySelection, bondToPoint, applyBondType, chainPoints, fuseOverlaps, drawHydrogens,
+  flipSelection, emptySelection, bondToPoint, applyBondType, chainPoints, fuseOverlaps, drawHydrogens, labelText,
 } from '../src/editor/ops';
+import { reverseLabel } from '../src/chem/abbreviations';
+import type { DocAtom } from '../src/doc/types';
 import { writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { perceiveStereo2D } from '../src/chem/stereo2d';
 import { expandAbbreviations } from '../src/chem/abbreviations';
@@ -117,6 +119,44 @@ describe('editor operations', () => {
     expect(parseAtomLabel('AcO−')).toMatchObject({ abbrev: 'OAc', charge: -1 });
     expect(parseAtomLabel('E+')).toMatchObject({ el: 'R', alias: 'E', charge: 1 });
     expect(parseAtomLabel('Nu-')).toMatchObject({ el: 'R', alias: 'Nu', charge: -1 });
+    // ions typed with their sign, and digits that belong to the formula
+    expect(parseAtomLabel('NO2+')).toMatchObject({ abbrev: 'NO2+', charge: 0 });
+    expect(parseAtomLabel('NO+')).toMatchObject({ abbrev: 'NO+', charge: 0 });
+    expect(parseAtomLabel('NO2-')).toMatchObject({ abbrev: 'NO2-', charge: 0 });
+    expect(parseAtomLabel('N3-')).toMatchObject({ abbrev: 'N3-', charge: 0 });
+    expect(parseAtomLabel('SMe2+')).toMatchObject({ abbrev: 'SMe2', charge: 0 });
+    expect(parseAtomLabel('R1-')).toMatchObject({ el: 'R', alias: 'R1', charge: -1 });
+    expect(parseAtomLabel('X2-')).toMatchObject({ el: 'R', alias: 'X2', charge: -1 });
+    // groups that already carry a charge count it once
+    expect(parseAtomLabel('COO-')).toMatchObject({ abbrev: 'COO', charge: 0 });
+    expect(parseAtomLabel('CO2-')).toMatchObject({ abbrev: 'CO2', charge: 0 });
+    expect(parseAtomLabel('Ph3P+')).toMatchObject({ abbrev: 'PPh3', charge: 0 });
+    // exact (reversed) spellings beat loose matches: MeS is methylthio, Mes is mesityl
+    expect(parseAtomLabel('MeS-')).toMatchObject({ abbrev: 'SMe', charge: -1 });
+    expect(parseAtomLabel('MeS')).toMatchObject({ abbrev: 'SMe' });
+    expect(parseAtomLabel('Mes')).toMatchObject({ abbrev: 'Mes' });
+    // reagents and generic anions
+    expect(parseAtomLabel('MeOH')).toMatchObject({ abbrev: 'MeOH' });
+    expect(parseAtomLabel('Me2NH')).toMatchObject({ abbrev: 'Me2NH' });
+    expect(parseAtomLabel('RS-')).toMatchObject({ el: 'R', alias: 'RS', charge: -1 });
+    expect(parseAtomLabel('B:')).toMatchObject({ el: 'R', alias: 'B:', charge: 0 });
+  });
+
+  it('label text keeps the charge so editing round-trips', () => {
+    for (const label of ['E+', 'Nu-', 'MeO-', 'CN-', 'R1-', 'NO2+', 'NH3+']) {
+      const a = { id: 1, el: 'C', x: 0, y: 0, charge: 0, ...parseAtomLabel(label) } as DocAtom;
+      const again = parseAtomLabel(labelText(a, true) || label)!;
+      expect({ abbrev: again.abbrev, alias: again.alias, charge: again.charge }).toEqual({ abbrev: a.abbrev, alias: a.alias, charge: a.charge });
+    }
+    const coo = { id: 1, el: 'C', x: 0, y: 0, charge: 0, ...parseAtomLabel('COO') } as DocAtom;
+    expect(labelText(coo, true)).toBe('COO-');
+    const ppa = { id: 1, el: 'C', x: 0, y: 0, charge: 0, ...parseAtomLabel('PPh3') } as DocAtom;
+    expect(labelText(ppa, true)).toBe('PPh3+');
+    expect(labelText(ppa, false)).toBe('PPh3');
+  });
+
+  it('reversed labels keep alkyl prefixes together', () => {
+    expect(['OtBu', 'OiPr', 'OAc', 'OTs', 'NHBoc', 'CO2H'].map(reverseLabel)).toEqual(['tBuO', 'iPrO', 'AcO', 'TsO', 'BocHN', 'HO2C']);
   });
 
   it('a charged label keeps its charge when expanded', () => {

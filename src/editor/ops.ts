@@ -8,7 +8,7 @@ import { freeAngles } from '../render/scene';
 import { BondStyle, Mol } from '../chem/mol';
 import { Pt, add, sub, mul, norm, len, dist, fromAngle, angleOf, perp, rotate, lerp } from '../render/geom';
 import { element, ISOTOPE_ALIASES } from '../chem/elements';
-import { findAbbreviation, parseCondensedLabel, reverseLabel } from '../chem/abbreviations';
+import { ABBREVIATIONS, findAbbreviation, parseCondensedLabel, reverseLabel, labelOffsetForNet, labelDisplayCharge } from '../chem/abbreviations';
 
 export const MERGE_TOL = 0.25;
 
@@ -152,7 +152,7 @@ export function applyBondType(b: DocBond, order: number, style: BondStyle): void
 }
 
 /** Parses typed atom label text into atom properties. Returns null if not understood as chemistry. */
-const PSEUDO_LABEL = /^(R\d*'*|R[a-z]|Ar|X\d*|Y|Z|Nu|E|LG|PG|Pg|M|L|Hal|A|Q|G\d*)$/;
+const PSEUDO_LABEL = /^(R\d*'*|R[a-z]|Ar|X\d*|Y|Z|Nu|Nuc|Nu:|B:|Base|E|LG|PG|Pg|M|L|Hal|A|Q|G\d*)$/;
 
 /** "+", "2-", "−", "3+" → signed charge. */
 function chargeOf(s: string): number {
@@ -161,11 +161,33 @@ function chargeOf(s: string): number {
   return sgn * (num ? +num : 1);
 }
 
+/** The abbreviation a label names: exact spellings first, also reversed (MeS is SMe, not mesityl), then any case. */
+function abbreviationKey(t: string): string | null {
+  if (ABBREVIATIONS[t]) return t;
+  const rev = reverseLabel(t);
+  if (rev !== t && ABBREVIATIONS[rev]) return rev;
+  return findAbbreviation(t) ?? (rev !== t ? findAbbreviation(rev) : null);
+}
+
+/**
+ * A group label with a typed net charge (`net`), or with no sign (`net` undefined: the group as defined, so
+ * "COO" is carboxylate). Abbreviation atoms store their charge as an offset from the group's own charge.
+ */
+function groupLabel(t: string, net: number | undefined, allowGeneric: boolean): Partial<DocAtom> | null {
+  const key = abbreviationKey(t === 'NC' && (net ?? 0) < 0 ? 'CN' : t); // N≡C⁻ written either way round is cyanide
+  if (key) return { abbrev: key, el: 'C', charge: net === undefined ? 0 : labelOffsetForNet(key, net), alias: undefined, hCount: undefined, isotope: undefined };
+  if (parseCondensedLabel(t)) return { abbrev: t, el: 'C', charge: net ?? 0, alias: undefined, hCount: undefined, isotope: undefined };
+  if (allowGeneric && (PSEUDO_LABEL.test(t) || t.length <= 6)) return { el: 'R', alias: t, abbrev: undefined, charge: net ?? 0, hCount: undefined, isotope: undefined };
+  return null;
+}
+
 export function parseAtomLabel(text: string): Partial<DocAtom> | null {
-  const t = text.trim();
+  const t = text.trim().replace(/−/g, '-');
   if (!t) return null;
+  // ions typed with their sign come first: "N3-" is azide, not nitride
+  if (ABBREVIATIONS[t]?.category === 'ion') return { abbrev: t, el: 'C', charge: 0, alias: undefined, hCount: undefined, isotope: undefined };
   // element with optional H count and charge: "N", "NH2", "OH", "N+", "O-", "NH3+", "13C", "Fe2+", "D"
-  const m = /^(\d+)?([A-Z][a-z]?)(?:H(\d*))?(\d*[+\-−]|[+\-−]\d*)?$/.exec(t);
+  const m = /^(\d+)?([A-Z][a-z]?)(?:H(\d*))?(\d*[+\-]|[+\-]\d*)?$/.exec(t);
   if (m) {
     let el = m[2];
     let isotope = m[1] ? +m[1] : undefined;
@@ -183,27 +205,38 @@ export function parseAtomLabel(text: string): Partial<DocAtom> | null {
     }
   }
   // formulas written hydrogens first: H2O, H3O+, HO-, H2N-, HCl
-  const f = /^H(\d*)([A-Z][a-z]?)(\d*[+\-−]|[+\-−]\d*)?$/.exec(t);
+  const f = /^H(\d*)([A-Z][a-z]?)(\d*[+\-]|[+\-]\d*)?$/.exec(t);
   if (f && f[2] !== 'H' && element(f[2])) {
     return { el: f[2], hCount: f[1] ? +f[1] : 1, charge: f[3] ? chargeOf(f[3]) : 0, abbrev: undefined, alias: undefined, isotope: undefined };
   }
-  const ab = findAbbreviation(t);
-  if (ab) return { abbrev: ab, el: 'C', charge: 0, alias: undefined, hCount: undefined, isotope: undefined };
-  if (parseCondensedLabel(t)) return { abbrev: t, el: 'C', charge: 0, alias: undefined, hCount: undefined };
-  const signed = /^(.+?)(\d*[+\-−]|[+\-−]\d*)$/.exec(t);
-  if (signed) {
-    // charged groups: CN-, MeO-, AcO-, OMe- (N≡C⁻ written either way round is cyanide)
-    const stem = signed[1] === 'NC' ? 'CN' : signed[1];
-    const key = findAbbreviation(stem) ?? findAbbreviation(reverseLabel(stem));
-    if (key) return { abbrev: key, el: 'C', charge: chargeOf(signed[2]), alias: undefined, hCount: undefined, isotope: undefined };
-    // charged generic atoms: E+, Nu-, X-
-    if (PSEUDO_LABEL.test(signed[1])) return { el: 'R', alias: signed[1], abbrev: undefined, charge: chargeOf(signed[2]), hCount: undefined };
+  // a label spelled exactly (ions such as NO2+ or BF4- include their sign), or a condensed formula
+  const exact = groupLabel(t, undefined, false);
+  if (exact) return exact;
+  // a trailing sign is the group's net charge: CN-, MeO-, COO-, Ph3P+, SMe2+, RS-, E+, R1-
+  const s1 = /^(.+)([+\-])$/.exec(t);
+  if (s1) {
+    const g = groupLabel(s1[1], s1[2] === '+' ? 1 : -1, true);
+    if (g) return g;
+  }
+  // a charge size written after the formula ("2-") only when nothing else fits
+  const s2 = /^(.+?)(\d+)([+\-])$/.exec(t);
+  if (s2) {
+    const g = groupLabel(s2[1], chargeOf(s2[2] + s2[3]), true);
+    if (g) return g;
   }
   // generic pseudo atoms: R, R1, R', Ar, X, Y, Z, Nu, E, LG, Pg…
   if (PSEUDO_LABEL.test(t) || t.length <= 6) {
     return { el: 'R', alias: t, abbrev: undefined, charge: 0, hCount: undefined };
   }
   return null;
+}
+
+/** The text that re-creates an atom's label when typed (used to start editing it): "OMe-", "E+", "COO-", "NH3+". */
+export function labelText(a: DocAtom, bonded: boolean): string {
+  const text = a.abbrev ?? a.alias;
+  if (!text) return '';
+  const q = a.abbrev ? labelDisplayCharge(a.abbrev, a.charge, bonded) : a.charge || 0;
+  return text + (q === 0 ? '' : (Math.abs(q) > 1 ? String(Math.abs(q)) : '') + (q > 0 ? '+' : '-'));
 }
 
 export function setAtomLabel(doc: ChemDoc, atomId: number, text: string): boolean {
