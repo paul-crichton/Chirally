@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createDoc, addAtom, addBond, insertMol } from '../src/doc/document';
 import { applyArrows, arrowGroups, octetViolations, placeStep } from '../src/doc/mechanism';
-import { parseSmiles, writeSmiles } from '../src/chem/smiles';
+import { parseSmiles, writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { ChemDoc, Anchor } from '../src/doc/types';
 import { Mol } from '../src/chem/mol';
 
@@ -192,6 +192,104 @@ describe('arrow pushing', () => {
     expect(p.arrow.x1).toBeGreaterThan(4);
     expect(Math.min(...p.mol.atoms.map((a) => a.x))).toBeGreaterThan(p.arrow.x2);
     expect(r.product.atoms.map((a) => a.x)).toEqual([0, 3, 4]); // the engine's product itself is not moved
+  });
+});
+
+/** Atom ids by label for hand-placed drawings: spec maps label → [element, x, y, charge?]. */
+function draw(doc: ChemDoc, spec: Record<string, [string, number, number, number?]>, bonds: [string, string, number?][]): Record<string, number> {
+  const ids: Record<string, number> = {};
+  for (const [k, [el, x, y, charge]] of Object.entries(spec)) ids[k] = addAtom(doc, { el, x, y, charge: charge ?? 0 }).id;
+  for (const [a, b, o] of bonds) addBond(doc, ids[a], ids[b], o ?? 1);
+  return ids;
+}
+const atomA = (id: number): Anchor => ({ type: 'atom', id });
+const canon = (s: string) => writeSmiles(parseSmiles(s));
+const productOf = (r: { product: Mol }) => writeSmiles(suppressHydrogens(r.product));
+
+describe('ambiguous arrows are read chemically, not by distance', () => {
+  it('1,2-hydride shift: the H migrates even though C3 is drawn nearer', () => {
+    const doc = createDoc();
+    const L = draw(doc, { C1: ['C', 0, 0], C2: ['C', 1, 0, 1], C3: ['C', 2, 0], C4: ['C', 3, 0], C5: ['C', 2, 1], H: ['H', 2, -1] },
+      [['C1', 'C2'], ['C2', 'C3'], ['C3', 'C4'], ['C3', 'C5'], ['C3', 'H']]);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, L.C3, L.H) }, atomA(L.C2))]);
+    expect(r.ok).toBe(true);
+    expect(productOf(r)).toBe(canon('CC[C+](C)C'));
+  });
+
+  it('1,2-methyl shift moves the methyl group', () => {
+    const doc = createDoc();
+    const L = draw(doc, { Cp: ['C', 0, 0, 1], Cq: ['C', 1, 0], M1: ['C', 2, 0], M2: ['C', 1, 1], M3: ['C', 1, -1] },
+      [['Cp', 'Cq'], ['Cq', 'M1'], ['Cq', 'M2'], ['Cq', 'M3']]);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, L.Cq, L.M3) }, atomA(L.Cp))]);
+    expect(productOf(r)).toBe(canon('CC[C+](C)C'));
+  });
+
+  it('HBr adds Markovnikov wherever the H is drawn', () => {
+    for (const hx of [0, 1, 2.2]) {
+      const doc = createDoc();
+      const L = draw(doc, { C1: ['C', 0, 0], C2: ['C', 1, 0], C3: ['C', 2, 0.5], H: ['H', hx, -1.3], Br: ['Br', hx, -2.3] },
+        [['C1', 'C2', 2], ['C2', 'C3'], ['H', 'Br']]);
+      const r = applyArrows(doc, [
+        arrow(doc, { type: 'bond', id: bondId(doc, L.C1, L.C2) }, atomA(L.H)),
+        arrow(doc, { type: 'bond', id: bondId(doc, L.H, L.Br) }, atomA(L.Br)),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(productOf(r).split('.').sort()).toEqual([canon('C[CH+]C'), '[Br-]'].sort());
+    }
+  });
+
+  it('a Grignard attacks through carbon even with Mg drawn nearer the carbonyl', () => {
+    const doc = createDoc();
+    const L = draw(doc, { Me: ['C', 0, 0], Mg: ['Mg', 1, 0], Br: ['Br', 2, 0], C: ['C', 1.6, 1.2], O: ['O', 2.5, 1.7], A: ['C', 1, 2], B: ['C', 2, 0.9] },
+      [['Me', 'Mg'], ['Mg', 'Br'], ['C', 'O', 2], ['C', 'A'], ['C', 'B']]);
+    const r = applyArrows(doc, [
+      arrow(doc, { type: 'bond', id: bondId(doc, L.Me, L.Mg) }, atomA(L.C)),
+      arrow(doc, { type: 'bond', id: bondId(doc, L.C, L.O) }, atomA(L.O)),
+    ]);
+    expect(r.ok).toBe(true);
+    expect(productOf(r).split('.').sort()).toEqual([canon('CC(C)(C)[O-]'), canon('[Mg+]Br')].sort());
+  });
+
+  it('a lone pair aimed at a C=O bond attacks the carbon', () => {
+    const doc = createDoc();
+    const L = draw(doc, { O1: ['O', 0, 0, -1], C: ['C', 2, 1], O: ['O', 1, 0.5], Me: ['C', 3, 1] }, [['C', 'O', 2], ['C', 'Me']]);
+    const r = applyArrows(doc, [
+      arrow(doc, atomA(L.O1), { type: 'bond', id: bondId(doc, L.C, L.O) }),
+      arrow(doc, { type: 'bond', id: bondId(doc, L.C, L.O) }, atomA(L.O)),
+    ]);
+    expect(r.ok).toBe(true);
+    expect(productOf(r)).toBe(canon('CC([O-])O'));
+  });
+
+  it('flags an arrow from a lone pair that points between two other atoms', () => {
+    const doc = createDoc();
+    const L = draw(doc, { N: ['C', 0, 0, -1], C: ['C', 2, 0], O: ['O', 3, 0], M: ['C', 2, 1] }, [['C', 'O', 2], ['C', 'M']]);
+    const r = applyArrows(doc, [arrow(doc, atomA(L.N), { type: 'between', a: L.M, b: L.O })]);
+    expect(r.ok).toBe(false);
+    expect(r.warnings[0].message).toMatch(/between two other atoms/);
+  });
+
+  it('does not warn when both readings give the same product (benzene)', () => {
+    const doc = createDoc();
+    const ids = put(doc, 'C1=CC=CC=C1', 0);
+    const br = put(doc, 'BrBr', 0).map((id, k) => (doc.atoms.get(id)!.y = -2 - k, id));
+    const r = applyArrows(doc, [
+      arrow(doc, { type: 'bond', id: bondId(doc, ids[0], ids[1]) }, atomA(br[0])),
+      arrow(doc, { type: 'bond', id: bondId(doc, br[0], br[1]) }, atomA(br[1])),
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('warns when only the drawing decides between two different products', () => {
+    // pent-2-ene + H⁺: both ends give a secondary cation, but different ones
+    const doc = createDoc();
+    const L = draw(doc, { C1: ['C', 0, 0], C2: ['C', 1, 0], C3: ['C', 2, 0], C4: ['C', 3, 0], C5: ['C', 4, 0], H: ['H', 1.2, -1.5, 1] },
+      [['C1', 'C2'], ['C2', 'C3', 2], ['C3', 'C4'], ['C4', 'C5']]);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, L.C2, L.C3) }, atomA(L.H))]);
+    expect(r.ok).toBe(true);
+    expect(productOf(r)).toBe(canon('CC[CH+]CC')); // H drawn nearer C2 → pentan-3-yl cation
+    expect(r.warnings.some((w) => w.level === 'warning' && /nearer atom was used/.test(w.message))).toBe(true);
   });
 });
 

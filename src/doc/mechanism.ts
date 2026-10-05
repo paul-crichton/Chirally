@@ -6,6 +6,7 @@ import { Mol } from '../chem/mol';
 import { clean2D } from '../chem/clean2d';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit } from '../chem/valence';
 import { valenceElectrons, element } from '../chem/elements';
+import { writeSmiles, suppressHydrogens } from '../chem/smiles';
 
 export interface MechanismWarning {
   message: string;
@@ -101,15 +102,43 @@ export function arrowGroups(doc: ChemDoc): ArrowGroup[] {
   });
 }
 
+/** Where an arrow takes its electrons from. */
+type Source = { atom: number } | { bond: [number, number] };
+
+/** Where an arrow puts its electrons. */
+type Destination =
+  | { t: 'lp'; atom: number } // non-bonding electrons on an atom
+  | { t: 'bond'; a: number; b: number } // into the a–b bond (formed if absent)
+  | { t: 'pick'; base: number; ends: [number, number]; prefer: number; weight: number; nearest: number } // a bond from `base` to one of `ends`
+  | { t: 'back' }; // unusable target: the electrons stay where they were
+
+interface ArrowPlan {
+  k: number;
+  src: Source;
+  dest: Destination;
+}
+
+interface Outcome {
+  product: Mol;
+  warnings: MechanismWarning[];
+  summary: string[];
+  changed: boolean;
+  resonance: boolean;
+  errors: number;
+}
+
 /**
  * Applies the given curved arrows. Each arrow moves 2 electrons (or 1 for fishhooks) from its source
  * (atom lone pair or bond) to its target (atom, bond, or the space between two atoms).
+ *
+ * Some drawings do not say which atom gets a new bond: an arrow from a bond to an atom outside it, or from a
+ * lone pair to a bond the atom is not part of. Every reading is tried; readings that break the octet rule
+ * lose, then the chemically expected one wins (1,2-shifts, hydrogen transfer, the polarity of the bond,
+ * Markovnikov/Michael selectivity), and only then the atom drawn nearer.
  */
 export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
-  const warnings: MechanismWarning[] = [];
-  const error = (message: string, atomIds?: number[]) => warnings.push({ message, atomIds, level: 'error' });
-  const warn = (message: string, atomIds?: number[]) => warnings.push({ message, atomIds, level: 'warning' });
-  const summary: string[] = [];
+  const fixed: MechanismWarning[] = [];
+  const error = (message: string, atomIds?: number[]) => fixed.push({ message, atomIds, level: 'error' });
   const arrows = arrowIds.map((id) => doc.curved.get(id)).filter(Boolean) as CurvedArrowObj[];
   const missing = () => error('An arrow is attached to an atom or bond that no longer exists');
   // involved fragments
@@ -134,18 +163,16 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   const { mol, index } = docToMol(doc, involved);
   const n = mol.atoms.length;
   const H = mol.atoms.map((_, i) => implicitH(mol, i));
-  const N = mol.atoms.map((_, i) => nonBondingElectrons(mol, i));
-  const N0 = [...N];
+  const N0 = mol.atoms.map((_, i) => nonBondingElectrons(mol, i));
   // bond electrons keyed by "i,j" (i<j)
   const key = (i: number, j: number) => (i < j ? `${i},${j}` : `${j},${i}`);
-  const be = new Map<string, number>();
+  const before = new Map<string, number>();
   const bondStyle = new Map<string, { style: string; id: number }>();
   for (const b of mol.bonds) {
     const k = key(b.a, b.b);
-    be.set(k, Math.round(b.order * 2));
+    before.set(k, Math.round(b.order * 2));
     bondStyle.set(k, { style: b.style, id: b.id });
   }
-  const before = new Map(be);
   const idx = (id: number) => index.get(id);
   const nearer = (pair: [number, number], target: number): number => {
     const t = mol.atoms[target];
@@ -155,24 +182,67 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     return da <= db ? a : b;
   };
 
+  // ── chemistry used to resolve ambiguous arrows ──
+  const order0 = (i: number, j: number) => (before.get(key(i, j)) ?? 0) / 2;
+  const en = (i: number) => element(mol.atoms[i].el)?.en || 2.5;
+  const isH = (i: number) => mol.atoms[i].el === 'H';
+  const others = (i: number, except: number) => mol.neighbors(i).filter((m) => m !== except);
+  /** How well atom p carries a positive charge or an unpaired electron: substitution, adjacent lone pairs and π bonds. */
+  const cationStability = (p: number, except: number) => {
+    let s = 0;
+    for (const m of others(p, except)) {
+      if (!isH(m)) s += 1;
+      if (['N', 'O', 'S'].includes(mol.atoms[m].el) && N0[m] >= 2) s += 2;
+      if (others(m, p).some((q) => order0(m, q) >= 2)) s += 1.5;
+    }
+    return s;
+  };
+  /** Atom p is next to an acceptor π bond (C=O, C≡N, N=O, …), so it can take a negative charge. */
+  const besideAcceptor = (p: number, except: number) =>
+    others(p, except).some((m) => others(m, p).some((q) => order0(m, q) >= 2 && en(q) > en(m) + 0.3));
+
+  /** Bond i–j pushes its electrons toward atom t (not in the bond): which end bonds to t? → [preferred end, weight]. */
+  const bondToAtomEnd = (i: number, j: number, t: number): [number, number] => {
+    const bi = order0(i, t) > 0, bj = order0(j, t) > 0;
+    const pi = order0(i, j) >= 2;
+    if (bi !== bj) {
+      const bonded = bi ? i : j, other = bi ? j : i;
+      // π electrons shift toward a neighbour (conjugation); a σ bond next to t migrates its far end (1,2-shift)
+      return [pi ? bonded : other, 10];
+    }
+    if (isH(i) !== isH(j)) return [isH(i) ? i : j, 10]; // hydrogen is what transfers
+    const d = en(i) - en(j);
+    if (Math.abs(d) >= 0.3) return [d > 0 ? i : j, 5]; // the electrons sit on the more electronegative end
+    if (pi) {
+      // Markovnikov: bond at the end that leaves the more stable cation (or radical) behind
+      const si = cationStability(j, i), sj = cationStability(i, j);
+      if (si !== sj) return [si > sj ? i : j, 3];
+    }
+    return [nearer([i, j], t), 0];
+  };
+  /** A lone pair on s attacks bond i–j (s not in it): which end does s bond to? → [preferred end, weight]. */
+  const atomToBondEnd = (s: number, i: number, j: number): [number, number] => {
+    const bi = order0(s, i) > 0, bj = order0(s, j) > 0;
+    if (bi !== bj) return [bi ? i : j, 10]; // a π bond to the neighbour
+    const d = en(i) - en(j);
+    if (Math.abs(d) >= 0.3) return [d < 0 ? i : j, 5]; // attack the electrophilic (less electronegative) end
+    const ai = besideAcceptor(j, i), aj = besideAcceptor(i, j);
+    if (ai !== aj) return [ai ? i : j, 3]; // Michael: attack the end away from the acceptor
+    return [nearer([i, j], s), 0];
+  };
+
+  // ── read the arrows ──
+  const plans: ArrowPlan[] = [];
   for (const c of arrows) {
     const k = c.electrons;
-    const addBondE = (i: number, j: number) => {
-      const kk = key(i, j);
-      be.set(kk, (be.get(kk) ?? 0) + k);
-    };
-    // ── source ──
-    let srcAtom = -1;
-    let srcPair: [number, number] | null = null;
+    let src: Source;
     if (c.from.type === 'atom') {
       const i = idx(c.from.id);
       if (i === undefined) {
         missing();
         continue;
       }
-      srcAtom = i;
-      if (N[i] < k) error(`${atomName(mol, i)} has no ${k === 2 ? 'lone pair' : 'non-bonding electron'} to donate`, [mol.atoms[i].id]);
-      N[i] -= k;
+      src = { atom: i };
     } else if (c.from.type === 'bond') {
       const b = doc.bonds.get(c.from.id);
       const i = b ? idx(b.a) : undefined, j = b ? idx(b.b) : undefined;
@@ -180,141 +250,190 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
         missing();
         continue;
       }
-      srcPair = [i, j];
-      const kk = key(i, j);
-      be.set(kk, (be.get(kk) ?? 0) - k);
-      if ((be.get(kk) ?? 0) < 0) error('An arrow starts from a bond with no electrons left', [mol.atoms[i].id, mol.atoms[j].id]);
+      src = { bond: [i, j] };
     } else {
       error('An electron-pushing arrow must start at an atom (lone pair) or a bond');
       continue;
     }
-    // ── target ──
-    // electrons go back to where they came from when the target is unusable
-    const giveBack = () => {
-      if (srcAtom >= 0) N[srcAtom] += k;
-      else if (srcPair) addBondE(srcPair[0], srcPair[1]);
-    };
+    const s = 'atom' in src ? src.atom : -1;
+    const pair = 'bond' in src ? src.bond : null;
+    let dest: Destination = { t: 'back' };
     if (c.to.type === 'atom') {
       const t = idx(c.to.id);
-      if (t === undefined) {
-        missing();
-        giveBack();
-        continue;
-      }
-      if (srcAtom >= 0) {
-        if (t === srcAtom) {
-          N[t] += k;
-          continue;
+      if (t === undefined) missing();
+      else if (s >= 0) dest = t === s ? { t: 'lp', atom: t } : { t: 'bond', a: s, b: t };
+      else if (pair) {
+        if (t === pair[0] || t === pair[1]) dest = { t: 'lp', atom: t };
+        else {
+          const [prefer, weight] = bondToAtomEnd(pair[0], pair[1], t);
+          dest = { t: 'pick', base: t, ends: pair, prefer, weight, nearest: nearer(pair, t) };
         }
-        addBondE(srcAtom, t);
-      } else if (srcPair) {
-        if (t === srcPair[0] || t === srcPair[1]) N[t] += k;
-        else addBondE(nearer(srcPair, t), t);
       }
     } else if (c.to.type === 'bond') {
       const b = doc.bonds.get(c.to.id);
       const i = b ? idx(b.a) : undefined, j = b ? idx(b.b) : undefined;
-      if (i === undefined || j === undefined) {
-        missing();
-        giveBack();
-        continue;
-      }
-      if (srcAtom >= 0 && srcAtom !== i && srcAtom !== j) {
-        // lone pair pushed toward a remote bond: interpret as forming a bond to the nearer atom
-        addBondE(nearer([i, j], srcAtom), srcAtom);
-        warn('Arrow from a lone pair to a remote bond interpreted as bond formation to the nearer atom');
-      } else addBondE(i, j);
+      if (i === undefined || j === undefined) missing();
+      else if (s >= 0 && s !== i && s !== j) {
+        const [prefer, weight] = atomToBondEnd(s, i, j);
+        dest = { t: 'pick', base: s, ends: [i, j], prefer, weight, nearest: nearer([i, j], s) };
+      } else dest = { t: 'bond', a: i, b: j };
     } else if (c.to.type === 'between') {
       const i = idx(c.to.a), j = idx(c.to.b);
-      if (i === undefined || j === undefined) {
-        missing();
-        giveBack();
-        continue;
-      }
-      addBondE(i, j);
-    } else {
-      error('An arrow ends in empty space — point it at an atom, a bond or between two atoms');
-      // electrons are lost → give them back to the source to keep counts consistent
-      giveBack();
-    }
+      if (i === undefined || j === undefined) missing();
+      else if (s >= 0 && s !== i && s !== j)
+        error(`An arrow from ${atomName(mol, s)} points between two other atoms — point it at the atom that ${atomName(mol, s)} bonds to`, [mol.atoms[s].id, mol.atoms[i].id, mol.atoms[j].id]);
+      else if (pair && ![i, j].some((x) => x === pair[0] || x === pair[1]))
+        error('An arrow from a bond points between two atoms that are not part of that bond', [mol.atoms[i].id, mol.atoms[j].id]);
+      else dest = { t: 'bond', a: i, b: j };
+    } else error('An arrow ends in empty space — point it at an atom, a bond or between two atoms');
+    plans.push({ k, src, dest });
   }
-
-  const changed =
-    N.some((v, i) => v !== N0[i]) || [...new Set([...before.keys(), ...be.keys()])].some((kk) => Math.max(0, be.get(kk) ?? 0) !== (before.get(kk) ?? 0));
-
-  // ── build product ──
-  const product = new Mol();
-  for (let i = 0; i < n; i++) product.atoms.push({ ...mol.atoms[i] });
-  const pairs: [number, number, number][] = [];
-  for (const [kk, e] of be) {
-    const [i, j] = kk.split(',').map(Number);
-    let ee = e;
-    if (ee % 2 !== 0) {
-      error(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the fishhook arrows`, [mol.atoms[i].id, mol.atoms[j].id]);
-      ee -= 1;
-      N[i] += 1; // keep the electron on one atom (radical)
-    }
-    if (ee <= 0) continue;
-    let order = ee / 2;
-    if (order > 3) {
-      error(`Bond order ${order} between ${atomName(mol, i)} and ${atomName(mol, j)}`, [mol.atoms[i].id, mol.atoms[j].id]);
-      order = 3;
-    }
-    pairs.push([i, j, order]);
-  }
-  for (const [i, j, order] of pairs) {
-    const kk = key(i, j);
-    const old = bondStyle.get(kk);
-    const bi = product.addBond(i, j, order, 'plain');
-    if (old) {
-      product.bonds[bi].id = old.id;
-      const st = old.style;
-      // keep stereo/visual styles on unchanged single bonds
-      if (order === 1 && (before.get(kk) ?? 0) === 2) product.bonds[bi].style = st as any;
-    } else product.bonds[bi].id = -1;
-    // summary
-    const prev = (before.get(kk) ?? 0) / 2;
-    if (prev === 0) summary.push(`formed ${atomName(mol, i)}–${atomName(mol, j)} bond`);
-    else if (order !== prev) summary.push(`${atomName(mol, i)}–${atomName(mol, j)}: bond order ${prev} → ${order}`);
-  }
-  for (const [kk, e] of before) {
-    if (e > 0 && !pairs.some(([i, j]) => key(i, j) === kk)) {
-      const [i, j] = kk.split(',').map(Number);
-      summary.push(`broke ${atomName(mol, i)}–${atomName(mol, j)} bond`);
-    }
-  }
-  product.invalidate();
-
-  // formal charges, radicals and fixed hydrogen counts
-  for (let i = 0; i < n; i++) {
-    const a = product.atoms[i];
-    if (a.abbrev || !element(a.el)) continue;
-    const V = valenceElectrons(a.el);
-    const B = bondOrderSum(product, i) + H[i];
-    const Ni = Math.max(0, N[i]);
-    if (N[i] < 0) error(`${atomName(mol, i)} gave away more electrons than it had`, [a.id]);
-    a.charge = Math.round(V - Ni - B);
-    const rad = Ni % 2;
-    // keep an existing diradical/carbene designation when the electron count is unchanged
-    if (rad) a.radical = 1;
-    else if (N0[i] === N[i] && mol.atoms[i].radical === 2) a.radical = 2;
-    else delete a.radical;
-    // fix H counts so they don't drift
-    delete a.hCount;
-    if (implicitH(product, i) !== H[i]) a.hCount = H[i];
-    // octet check
-    const count = 2 * B + Ni;
-    const lim = octetLimit(a.el);
-    if (count > lim) error(`${atomName(mol, i)} would have ${count} valence electrons (limit ${lim})`, [a.id]);
-  }
-
-  // resonance: σ framework unchanged?
-  const sig = (m: Map<string, number>) => [...m.entries()].filter(([, e]) => e > 0).map(([kk]) => kk).sort().join('|');
   if (!arrows.length) error('No electron-pushing arrows to apply');
+
+  // ── electron bookkeeping for one reading of the arrows ──
+  const sig = (m: Map<string, number>) => [...m.entries()].filter(([, e]) => e > 0).map(([kk]) => kk).sort().join('|');
+  const simulate = (picks: number[]): Outcome => {
+    const warnings: MechanismWarning[] = [];
+    const err = (message: string, atomIds?: number[]) => warnings.push({ message, atomIds, level: 'error' });
+    const summary: string[] = [];
+    const N = [...N0];
+    const be = new Map(before);
+    const addBondE = (i: number, j: number, k: number) => be.set(key(i, j), (be.get(key(i, j)) ?? 0) + k);
+    let p = 0;
+    for (const { k, src, dest } of plans) {
+      if ('atom' in src) {
+        const i = src.atom;
+        if (N[i] < k) err(`${atomName(mol, i)} has no ${k === 2 ? 'lone pair' : 'non-bonding electron'} to donate`, [mol.atoms[i].id]);
+        N[i] -= k;
+      } else {
+        const [i, j] = src.bond;
+        addBondE(i, j, -k);
+        if ((be.get(key(i, j)) ?? 0) < 0) err('An arrow starts from a bond with no electrons left', [mol.atoms[i].id, mol.atoms[j].id]);
+      }
+      if (dest.t === 'lp') N[dest.atom] += k;
+      else if (dest.t === 'bond') addBondE(dest.a, dest.b, k);
+      else if (dest.t === 'pick') addBondE(dest.base, picks[p++], k);
+      else if ('atom' in src) N[src.atom] += k;
+      else addBondE(src.bond[0], src.bond[1], k);
+    }
+    const changed =
+      N.some((v, i) => v !== N0[i]) || [...new Set([...before.keys(), ...be.keys()])].some((kk) => Math.max(0, be.get(kk) ?? 0) !== (before.get(kk) ?? 0));
+
+    // build the product
+    const product = new Mol();
+    for (let i = 0; i < n; i++) product.atoms.push({ ...mol.atoms[i] });
+    const pairs: [number, number, number][] = [];
+    for (const [kk, e] of be) {
+      const [i, j] = kk.split(',').map(Number);
+      let ee = e;
+      if (ee % 2 !== 0) {
+        err(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the fishhook arrows`, [mol.atoms[i].id, mol.atoms[j].id]);
+        ee -= 1;
+        N[i] += 1; // keep the electron on one atom (radical)
+      }
+      if (ee <= 0) continue;
+      let order = ee / 2;
+      if (order > 3) {
+        err(`Bond order ${order} between ${atomName(mol, i)} and ${atomName(mol, j)}`, [mol.atoms[i].id, mol.atoms[j].id]);
+        order = 3;
+      }
+      pairs.push([i, j, order]);
+    }
+    for (const [i, j, order] of pairs) {
+      const kk = key(i, j);
+      const old = bondStyle.get(kk);
+      const bi = product.addBond(i, j, order, 'plain');
+      if (old) {
+        product.bonds[bi].id = old.id;
+        // keep stereo/visual styles on unchanged single bonds
+        if (order === 1 && (before.get(kk) ?? 0) === 2) product.bonds[bi].style = old.style as Mol['bonds'][number]['style'];
+      } else product.bonds[bi].id = -1;
+      const prev = (before.get(kk) ?? 0) / 2;
+      if (prev === 0) summary.push(`formed ${atomName(mol, i)}–${atomName(mol, j)} bond`);
+      else if (order !== prev) summary.push(`${atomName(mol, i)}–${atomName(mol, j)}: bond order ${prev} → ${order}`);
+    }
+    for (const [kk, e] of before) {
+      if (e > 0 && !pairs.some(([i, j]) => key(i, j) === kk)) {
+        const [i, j] = kk.split(',').map(Number);
+        summary.push(`broke ${atomName(mol, i)}–${atomName(mol, j)} bond`);
+      }
+    }
+    product.invalidate();
+
+    // formal charges, radicals and fixed hydrogen counts
+    for (let i = 0; i < n; i++) {
+      const a = product.atoms[i];
+      if (a.abbrev || !element(a.el)) continue;
+      const V = valenceElectrons(a.el);
+      const B = bondOrderSum(product, i) + H[i];
+      const Ni = Math.max(0, N[i]);
+      if (N[i] < 0) err(`${atomName(mol, i)} gave away more electrons than it had`, [a.id]);
+      a.charge = Math.round(V - Ni - B);
+      const rad = Ni % 2;
+      // keep an existing diradical/carbene designation when the electron count is unchanged
+      if (rad) a.radical = 1;
+      else if (N0[i] === N[i] && mol.atoms[i].radical === 2) a.radical = 2;
+      else delete a.radical;
+      // fix H counts so they don't drift
+      delete a.hCount;
+      if (implicitH(product, i) !== H[i]) a.hCount = H[i];
+      const count = 2 * B + Ni;
+      const lim = octetLimit(a.el);
+      if (count > lim) err(`${atomName(mol, i)} would have ${count} valence electrons (limit ${lim})`, [a.id]);
+    }
+    const errors = warnings.length + fixed.filter((w) => w.level === 'error').length;
+    // a failed or empty step is never a resonance structure
+    const resonance = errors === 0 && changed && sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
+    return { product, warnings, summary, changed, resonance, errors };
+  };
+
+  // ── choose the reading of ambiguous arrows ──
+  const pickPlans = plans.map((p) => p.dest).filter((d): d is Extract<Destination, { t: 'pick' }> => d.t === 'pick');
+  const preferred = pickPlans.map((d) => d.prefer);
+  const alt = (d: Extract<Destination, { t: 'pick' }>, end: number) => (end === d.ends[0] ? d.ends[1] : d.ends[0]);
+  const cost = (picks: number[]) => picks.reduce((s, e, q) => s + (e !== pickPlans[q].prefer ? pickPlans[q].weight : 0) + (e !== pickPlans[q].nearest ? 0.5 : 0), 0);
+  let bestPicks = preferred;
+  let best = simulate(preferred);
+  if (pickPlans.length && pickPlans.length <= 8) {
+    let bestScore = best.errors * 1000 + cost(preferred);
+    for (let mask = 1; mask < 1 << pickPlans.length; mask++) {
+      const picks = preferred.map((e, q) => (mask & (1 << q) ? alt(pickPlans[q], e) : e));
+      const o = simulate(picks);
+      const score = o.errors * 1000 + cost(picks);
+      if (score < bestScore) {
+        bestScore = score;
+        best = o;
+        bestPicks = picks;
+      }
+    }
+  }
+  const warnings = [...fixed, ...best.warnings];
+  // an arrow that only the drawing's geometry decided, and whose other reading is just as valid
+  pickPlans.forEach((d, q) => {
+    if (d.weight > 0 || best.errors) return;
+    const picks = [...bestPicks];
+    picks[q] = alt(d, picks[q]);
+    const other = simulate(picks);
+    const a = smilesOf(other.product);
+    if (other.errors || (a !== null && a === smilesOf(best.product))) return;
+    const [x, y] = [bestPicks[q], picks[q]];
+    warnings.push({
+      message: `An arrow could make a ${atomName(mol, d.base)}–${atomName(mol, x)} or a ${atomName(mol, d.base)}–${atomName(mol, y)} bond; the nearer atom was used. Point the arrow at an atom (or between two atoms) to choose.`,
+      atomIds: [mol.atoms[d.base].id, mol.atoms[x].id, mol.atoms[y].id],
+      level: 'warning',
+    });
+  });
   const ok = !warnings.some((w) => w.level === 'error');
-  // a failed or empty step is never a resonance structure
-  const resonance = ok && changed && sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
-  return { product, reactantAtomIds: [...involved], warnings, resonance, ok, changed, summary };
+  return { product: best.product, reactantAtomIds: [...involved], warnings, resonance: ok && best.resonance, ok, changed: best.changed, summary: best.summary };
+}
+
+/** Canonical SMILES without explicit hydrogens (so drawn and implicit H compare equal), or null if it cannot be written. */
+function smilesOf(m: Mol): string | null {
+  try {
+    return writeSmiles(suppressHydrogens(m));
+  } catch {
+    return null;
+  }
 }
 
 export interface StepPlacement {

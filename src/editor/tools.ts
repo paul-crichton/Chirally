@@ -1049,13 +1049,22 @@ class CurvedTool implements Tool {
     const h = ed.hitTest({ x: e.x, y: e.y }, e.touch);
     if (h?.kind === 'atom' && !(this.from?.type === 'atom' && this.from.id === h.id)) return { type: 'atom', id: h.id };
     if (h?.kind === 'bond' && !(this.from?.type === 'bond' && this.from.id === h.id)) return { type: 'bond', id: h.id };
-    // midpoint between two non-bonded atoms → "between" (new bond target)
+    // midpoint between two non-bonded atoms → "between" (new bond target). Only pairs that make sense for the
+    // arrow's source: its own atom (a lone pair forming a bond) or an atom of its bond (shifting that bond).
+    const from = this.from;
+    const srcAtoms = new Set<number>();
+    if (from?.type === 'atom') srcAtoms.add(from.id);
+    else if (from?.type === 'bond') {
+      const b = ed.doc.bonds.get(from.id);
+      if (b) [b.a, b.b].forEach((id) => srcAtoms.add(id));
+    }
     let best: { a: number; b: number; d: number } | null = null;
     const atoms = [...ed.doc.atoms.values()];
-    if (atoms.length < 400) {
+    if (srcAtoms.size && atoms.length < 400) {
       for (let i = 0; i < atoms.length; i++) {
         for (let j = i + 1; j < atoms.length; j++) {
           const A = atoms[i], B = atoms[j];
+          if (!srcAtoms.has(A.id) && !srcAtoms.has(B.id)) continue;
           const L = dist(A, B);
           if (L > 3.2 || L < 0.6) continue;
           if (bondBetween(ed.doc, A.id, B.id)) continue;
