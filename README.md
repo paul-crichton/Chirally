@@ -35,8 +35,14 @@ It's designed mainly for mouse and keyboard, and also works with touch on tablet
 
 ![Drawing curved arrows and generating the cyanohydrin alkoxide](docs/mechanism.png)
 
-- Electron-pushing arrows: full-headed (electron pair) and fishhook (single electron), anchored to atoms, bonds or the space between two atoms, with draggable curvature.
-- **Arrow-pushing simulator**: *Apply arrows → next intermediate* does the electron bookkeeping (lone pairs, bonds, formal charges, radicals). It draws the product with a reaction or resonance arrow and warns about octet violations or arrows that don't make sense.
+- Electron-pushing arrows: full-headed (electron pair) and fishhook (single electron), anchored to atoms, bonds or the space between two atoms, with draggable curvature. An arrow can also start or end on the H of an `OH` or `NH2` label, so proton transfers don't need every hydrogen drawn.
+- **Arrow-pushing simulator**: *Apply arrows → next intermediate* does the electron bookkeeping (lone pairs, bonds, formal charges, radicals). It draws the product with a reaction or resonance arrow and lays out the step as a scheme: the product after the arrow, by-products after a "+", and rings that open or close redrawn cleanly.
+  - **Safe by default**: a product that breaks the rules (a 10-electron carbon, a lost charge) is shown as a red preview with the reasons listed, and is not added unless you choose *Insert anyway*. A failed step is never called resonance.
+  - **Remembers applied steps**: each arrow group knows which step it produced, so pressing Apply again only works on new arrows. Undo, or deleting the step, makes the group applicable again. Right-click an arrow to apply just its group.
+  - **Reads arrows like a chemist**: when an arrow could mean more than one thing, it prefers the chemically sensible reading (attack at the more electrophilic atom, Markovnikov and Michael positions) and tells you when the choice was close.
+  - **Aromatic rings and ions**: rings drawn delocalised are given Kekulé bonds that fit the arrows and restored afterwards, including charged rings such as cyclopentadienyl anion and tropylium.
+  - **Labels and reagents**: `OMe`, `COO⁻`, `PPh3`, `NEt3`, `MeOH`, `NO2⁺`, `BF4⁻` and other groups take part as the atoms they stand for, with charges counted once. Generic `Nu⁻`, `E⁺`, `B:` and `R` atoms work too. Typed charges (`MeO-`, `SMe2+`) survive editing and export to CDXML and MOL.
+  - **Stereochemistry**: wedges are carried through; backside attack inverts a centre, and a centre that becomes planar loses its wedge with a warning.
 - Reaction mass balance and atom economy for drawn schemes. Exports reaction SMILES and RXN files.
 
 **PubChem**
@@ -50,7 +56,7 @@ It's designed mainly for mouse and keyboard, and also works with touch on tablet
 
 ## Features ChemDraw doesn't have
 
-1. **Arrow-pushing simulator**: draw the curved arrows and Chirally works out the next intermediate, charges included.
+1. **Arrow-pushing simulator**: draw the curved arrows and Chirally works out the next intermediate, charges and stereochemistry included. It previews a step that doesn't work instead of drawing a wrong structure.
 2. **Formulation insights** for cosmetic and pharma formulators:
    - skin-penetration checks (500 Da rule, logP 1–3, Potts–Guy log Kp);
    - HLB (Davies and Griffin) for surfactants, with how to use the value;
