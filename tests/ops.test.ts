@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createDoc, addAtom, addBond, docToMol, adjacency } from '../src/doc/document';
 import {
   idealBondDirection, placeRing, fuseRingOnBond, attachRingToAtom, deleteSelection, mergeAtoms, parseAtomLabel,
-  flipSelection, emptySelection, bondToPoint, applyBondType, chainPoints, fuseOverlaps,
+  flipSelection, emptySelection, bondToPoint, applyBondType, chainPoints, fuseOverlaps, drawHydrogens,
 } from '../src/editor/ops';
 import { writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { perceiveStereo2D } from '../src/chem/stereo2d';
@@ -206,3 +206,30 @@ import { parseSmiles } from '../src/chem/smiles';
 function writeSmilesOf(s: string): string {
   return writeSmiles(parseSmiles(s));
 }
+
+describe('drawHydrogens', () => {
+  it('draws implicit hydrogens as H atoms without changing the structure', () => {
+    const d = createDoc();
+    const c1 = addAtom(d, { el: 'C', x: 0, y: 0 });
+    const c2 = addAtom(d, { el: 'C', x: 1, y: 0 });
+    addBond(d, c1.id, c2.id);
+    const before = smi(d);
+    expect(drawHydrogens(d, [c1.id])).toBe(3);
+    expect(smi(d)).toBe(before);
+    const hs = [...d.atoms.values()].filter((a) => a.el === 'H');
+    expect(hs.length).toBe(3);
+    // spread out, away from the C–C bond
+    for (const h of hs) expect(h.x).toBeLessThan(0.5);
+    expect(drawHydrogens(d, [c1.id])).toBe(0);
+  });
+
+  it('works on labelled atoms with an explicit H count', () => {
+    const d = createDoc();
+    const o = addAtom(d, { el: 'O', x: 0, y: 0 });
+    Object.assign(o, parseAtomLabel('H3O+'));
+    expect(drawHydrogens(d, [o.id])).toBe(3);
+    expect(d.atoms.get(o.id)!.hCount).toBeUndefined();
+    expect(smi(d)).toBe(writeSmilesOf('[OH3+]'));
+  });
+});
+

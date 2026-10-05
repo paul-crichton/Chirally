@@ -1,8 +1,10 @@
 // Pure document operations used by the editor tools (no UI state).
 import { ChemDoc, DocAtom, DocBond } from '../doc/types';
 import {
-  addAtom, addBond, adjacency, bondBetween, neighborsOf, removeAtom, removeBond, insertMol, pruneCurved,
+  addAtom, addBond, adjacency, bondBetween, neighborsOf, removeAtom, removeBond, insertMol, pruneCurved, docToMol,
 } from '../doc/document';
+import { implicitH } from '../chem/valence';
+import { freeAngles } from '../render/scene';
 import { BondStyle, Mol } from '../chem/mol';
 import { Pt, add, sub, mul, norm, len, dist, fromAngle, angleOf, perp, rotate, lerp } from '../render/geom';
 import { element, ISOTOPE_ALIASES } from '../chem/elements';
@@ -214,6 +216,31 @@ export function setAtomLabel(doc: ChemDoc, atomId: number, text: string): boolea
     else (a as any)[k] = v;
   }
   return true;
+}
+
+/**
+ * Draws the implicit hydrogens of the given atoms as H atoms (so curved arrows can start or end on a C–H
+ * bond or its H). Returns the number of H atoms added.
+ */
+export function drawHydrogens(doc: ChemDoc, atomIds: Iterable<number>): number {
+  let added = 0;
+  const adj = adjacency(doc);
+  for (const id of atomIds) {
+    const a = doc.atoms.get(id);
+    if (!a || a.abbrev || a.alias || !element(a.el) || a.el === 'H') continue;
+    const nbrs = neighborsOf(doc, id, adj);
+    const { mol, index } = docToMol(doc, [id, ...nbrs]);
+    const k = implicitH(mol, index.get(id)!);
+    if (k < 1) continue;
+    const occupied = nbrs.map((n) => angleOf(sub(doc.atoms.get(n)!, a)));
+    for (const ang of freeAngles(occupied, k, occupied.length ? occupied[0] + Math.PI : -Math.PI / 2)) {
+      const h = addAtom(doc, { el: 'H', x: a.x + Math.cos(ang) * 0.8, y: a.y + Math.sin(ang) * 0.8 });
+      addBond(doc, id, h.id);
+      added++;
+    }
+    delete a.hCount;
+  }
+  return added;
 }
 
 export function setElement(doc: ChemDoc, atomId: number, el: string): void {

@@ -42,6 +42,8 @@ export interface Box {
   y2: number;
   /** Clip shape: 'rect' (default) or 'ellipse' inscribed in the box. */
   shape?: 'rect' | 'ellipse';
+  /** 'h': the box around an atom label's implicit hydrogens. */
+  role?: 'h';
 }
 
 /** Parameter t ∈ [0,1] at which the segment p→q leaves the box (0 if p is outside). */

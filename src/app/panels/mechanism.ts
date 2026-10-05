@@ -57,6 +57,7 @@ export class MechanismPanel {
             h('li', null, 'Bond → one of its atoms: heterolysis, the electrons stay on that atom.'),
             h('li', null, 'Bond → another bond / atom: shifts the π/σ electrons (resonance, additions).'),
             h('li', null, 'Fishhooks move one electron each: two fishhooks from one bond = homolysis (radicals).'),
+            h('li', null, 'Proton transfers: start or end an arrow on the H of a label (OH, NH₃⁺, OH₂⁺) — as a target it is that H, as a source its X–H bond. For C–H bonds, right-click the atom → Draw hydrogens as atoms.'),
             h('li', null, 'If an arrow could mean two different bonds, Chirally keeps octets intact first, then follows the chemistry (1,2-shifts, hydrogen transfer, bond polarity, Markovnikov and Michael selectivity); it tells you when only the drawing decided.'),
             h('li', null, 'Charges, radicals and lone pairs of the product are recomputed from electron counts; octet violations are flagged.'),
             h('li', null, 'Rings drawn with delocalised (aromatic) bonds are given alternating double bonds for the step; rings the arrows don’t touch stay delocalised.'),

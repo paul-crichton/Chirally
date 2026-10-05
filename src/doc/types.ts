@@ -33,7 +33,7 @@ export interface ArrowObj {
 
 /** Where a curved (electron-pushing) arrow starts or ends. */
 export type Anchor =
-  | { type: 'atom'; id: number }                       // lone pair / atom centre
+  | { type: 'atom'; id: number; h?: boolean }          // lone pair / atom centre; h: one of the atom's implicit H (the X–H bond as a source)
   | { type: 'bond'; id: number }                       // bonding pair (bond midpoint)
   | { type: 'between'; a: number; b: number }          // new bond between two atoms (target only)
   | { type: 'point'; x: number; y: number };           // free point

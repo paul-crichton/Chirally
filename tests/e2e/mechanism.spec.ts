@@ -88,3 +88,57 @@ test('applied steps are remembered; undo makes them applicable again', async ({ 
   await page.getByRole('button', { name: /Apply arrows/ }).click();
   expect(await atomCount(page)).toBe(after);
 });
+
+test('arrows can start and end on the H of an OH label', async ({ page }) => {
+  await page.evaluate(() => {
+    const app = (window as any).chirally;
+    const ed = app.editor;
+    ed.mutate('setup', (d: any) => {
+      const add = (el: string, x: number, y: number, charge = 0) => {
+        const id = d.nextId++;
+        d.atoms.set(id, { id, el, x, y, charge });
+        return id;
+      };
+      const bond = (a: number, b: number, order = 1) => {
+        const id = d.nextId++;
+        d.bonds.set(id, { id, a, b, order, style: 'plain' });
+      };
+      add('O', -1, 0, -1); // hydroxide, left
+      const c1 = add('C', 2, 0), c2 = add('C', 2.87, 0.5), o1 = add('O', 2.87, 1.5), o2 = add('O', 3.73, 0);
+      bond(c1, c2);
+      bond(c2, o1, 2);
+      bond(c2, o2); // acid O–H with its H drawn on the right of the label
+    });
+    ed.fitToContent();
+    ed.settings.curved = 2;
+    ed.setTool('curved');
+  });
+  const pts = await page.evaluate(() => {
+    const ed = (window as any).chirally.editor;
+    const atoms = [...ed.doc.atoms.values()];
+    const ho = atoms[0], acidO = atoms[4];
+    const box = ed.getScene().labelBoxes.get(acidO.id).find((b: any) => b.role === 'h');
+    const r = ed.canvas.getBoundingClientRect();
+    const scr = (p: any) => { const s = ed.toScreen(p); return { x: r.left + s.x, y: r.top + s.y }; };
+    return { ho: scr(ho), o: scr(acidO), h: scr({ x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 }) };
+  });
+  const drag = async (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move((a.x + b.x) / 2, a.y - 30, { steps: 4 });
+    await page.mouse.move(b.x, b.y, { steps: 4 });
+    await page.mouse.up();
+  };
+  await drag(pts.ho, pts.h); // base → the H
+  await drag(pts.h, pts.o); // the O–H bond → O
+  const anchors = await page.evaluate(() => [...(window as any).chirally.editor.doc.curved.values()].map((c: any) => [c.from, c.to]));
+  expect(anchors[0][1]).toMatchObject({ type: 'atom', h: true });
+  expect(anchors[1][0]).toMatchObject({ type: 'atom', h: true });
+  expect(anchors[1][1].h).toBeFalsy();
+  await page.getByRole('button', { name: /Apply arrows/ }).click();
+  await expect(page.locator('.mech-warnings .err')).toHaveCount(0);
+  const smi = await page.evaluate(() => (window as any).chirally.currentSmiles());
+  expect(smi.split('.').sort()).toEqual(expect.arrayContaining(['CC([O-])=O', 'O']));
+  await page.screenshot({ path: 'test-results/mechanism-h-anchor.png' });
+});
+

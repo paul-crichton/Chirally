@@ -174,6 +174,30 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     for (let k = drawn.atoms.length; k < mol.atoms.length; k++) if (mol.atoms[k].id === a.id) members.push(k);
     labelGroups.push({ at: i, label: a.abbrev!, members, attachCharge: g.atoms[0].charge });
   });
+  // an arrow at the H of an atom's label acts on one of its implicit hydrogens: that H becomes a real atom for the
+  // step (-1: the atom has none) and is folded back into the implicit H count of whichever atom holds it afterwards
+  const hydrogenOf = new Map<number, number>();
+  for (const c of arrows)
+    for (const an of [c.from, c.to]) {
+      const i = an.type === 'atom' && an.h ? index.get(an.id) : undefined;
+      if (i === undefined || hydrogenOf.has(i)) continue;
+      const a = mol.atoms[i];
+      const hc = implicitH(mol, i);
+      if (hc < 1) {
+        error(`${atomName(mol, i)} has no hydrogen to move`, [a.id]);
+        hydrogenOf.set(i, -1);
+        continue;
+      }
+      let dx = 0, dy = 0;
+      for (const nb of mol.neighbors(i)) (dx += a.x - mol.atoms[nb].x), (dy += a.y - mol.atoms[nb].y);
+      const l = Math.hypot(dx, dy);
+      a.hCount = hc - 1;
+      const hi = mol.atoms.length;
+      mol.atoms.push({ id: a.id, el: 'H', charge: 0, x: a.x + (l > 1e-6 ? dx / l : 0) * 0.9, y: a.y + (l > 1e-6 ? dy / l : -1) * 0.9 });
+      mol.bonds.push({ id: -1, a: i, b: hi, order: 1, style: 'plain' });
+      mol.invalidate();
+      hydrogenOf.set(i, hi);
+    }
   const n = mol.atoms.length;
   // rings drawn with delocalised bonds: the bookkeeping needs a Kekulé structure, with the bonds that arrows
   // start from as double bonds where possible; rings no arrow touches are drawn delocalised again afterwards
@@ -302,7 +326,12 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
         missing();
         continue;
       }
-      src = { atom: i };
+      if (c.from.h) {
+        // from the H of a label: the X–H bond
+        const hi = hydrogenOf.get(i)!;
+        if (hi < 0) continue;
+        src = { bond: [i, hi] };
+      } else src = { atom: i };
     } else if (c.from.type === 'bond') {
       const b = doc.bonds.get(c.from.id);
       const i = b ? idx(b.a) : undefined, j = b ? idx(b.b) : undefined;
@@ -326,10 +355,14 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     const pair = 'bond' in src ? src.bond : null;
     let dest: Destination = { t: 'back' };
     if (c.to.type === 'atom') {
-      const t = idx(c.to.id);
-      if (t === undefined) missing();
-      else if (s >= 0) dest = t === s ? { t: 'lp', atom: t } : { t: 'bond', a: s, b: t };
-      else if (pair) {
+      let t = idx(c.to.id);
+      if (t !== undefined && c.to.h) t = (hydrogenOf.get(t) ?? -1) >= 0 ? hydrogenOf.get(t) : undefined; // the H itself
+      if (t === undefined) {
+        if (!c.to.h) missing();
+      } else if (s >= 0) {
+        if (t === s) fixed.push({ message: 'An arrow starts and ends on the same atom — it moves no electrons', atomIds: [mol.atoms[s].id], level: 'warning' });
+        dest = t === s ? { t: 'lp', atom: t } : { t: 'bond', a: s, b: t };
+      } else if (pair) {
         if (t === pair[0] || t === pair[1]) dest = { t: 'lp', atom: t };
         else {
           const [prefer, weight] = bondToAtomEnd(pair[0], pair[1], t);
@@ -400,7 +433,8 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       if (ee % 2 !== 0) {
         err(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the ${fishhooks ? 'fishhook arrows' : 'arrows'}`, [mol.atoms[i].id, mol.atoms[j].id]);
         ee -= 1;
-        N[i] += 1; // keep the electron on one atom (radical)
+        // the stray electron stays on the atom that gained fewer (after a lone fishhook both ends are radicals)
+        N[N[i] - N0[i] <= N[j] - N0[j] ? i : j] += 1;
       }
       if (ee <= 0) continue;
       let order = ee / 2;
@@ -477,8 +511,19 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       delete a.hCount;
       if (implicitH(product, i) !== H[i]) a.hCount = H[i];
     }
-    // label groups the arrows left unchanged become labels again (with the charge their attachment atom gained)
+    // hydrogens taken from labels go back to being implicit H of the atom that holds them now
     const drop = new Set<number>();
+    for (const hi of hydrogenOf.values()) {
+      if (hi < 0) continue;
+      const nb = product.neighbors(hi);
+      const h = product.atoms[hi];
+      if (nb.length !== 1 || h.charge || h.radical || product.bonds[product.bondBetween(hi, nb[0])].order !== 1) continue;
+      const holder = product.atoms[nb[0]];
+      if (holder.abbrev || !element(holder.el)) continue;
+      holder.hCount = (holder.hCount ?? implicitH(product, nb[0])) + 1;
+      drop.add(hi);
+    }
+    // label groups the arrows left unchanged become labels again (with the charge their attachment atom gained)
     const expanded: string[] = [];
     for (const g of labelGroups) {
       const inGroup = new Set(g.members);
@@ -503,7 +548,15 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     const errors = warnings.filter((w) => w.level === 'error').length + fixed.filter((w) => w.level === 'error').length;
     // a failed or empty step is never a resonance structure
     const resonance = errors === 0 && changed && sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
-    return { product: drop.size ? withoutAtoms(product, drop) : product, warnings, summary, changed, resonance, errors };
+    const out = drop.size ? withoutAtoms(product, drop) : product;
+    // keep H counts implicit wherever the valence rules give the same number
+    out.atoms.forEach((a, i) => {
+      if (a.hCount === undefined || a.abbrev || !element(a.el)) return;
+      const hc = a.hCount;
+      delete a.hCount;
+      if (implicitH(out, i) !== hc) a.hCount = hc;
+    });
+    return { product: out, warnings, summary, changed, resonance, errors };
   };
 
   // ── choose the reading of ambiguous arrows ──

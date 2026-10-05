@@ -19,7 +19,7 @@ import { ChemDoc, STYLE_PRESETS, DocStyle } from '../doc/types';
 import { Mol } from '../chem/mol';
 import { Hit } from '../editor/types';
 import {
-  flipSelection, rotateSelection, selectedAtomIds, emptySelection, setElement, applyBondType, deleteSelection, scaleSelection,
+  flipSelection, rotateSelection, drawHydrogens, selectedAtomIds, emptySelection, setElement, applyBondType, deleteSelection, scaleSelection,
   attachRingToAtom, fuseRingOnBond,
 } from '../editor/ops';
 import { editTextObject, editArrowCaption } from '../editor/tools';
@@ -586,6 +586,17 @@ export class App {
     ed.mutate('Expand label', (d) => targets.forEach((id) => expandLabel(d, id)));
   }
 
+  /** Draws implicit H as H atoms on the given atoms, the selection, or the hovered atom (for curved arrows on C–H). */
+  drawHydrogenAtoms(ids?: number[]): void {
+    const ed = this.editor;
+    const sel = [...selectedAtomIds(ed.doc, ed.sel)];
+    const targets = ids ?? (sel.length ? sel : ed.hover?.kind === 'atom' ? [ed.hover.id] : []);
+    if (!targets.length) return toast('Select the atoms whose hydrogens you want to draw', 'info');
+    let n = 0;
+    ed.mutate('Draw hydrogens', (d) => (n = drawHydrogens(d, targets)));
+    if (!n) toast('Those atoms have no implicit hydrogens', 'info');
+  }
+
   duplicate(): void {
     const ed = this.editor;
     if (!ed.hasSelection()) return;
@@ -709,6 +720,7 @@ export class App {
       C('delete', 'Delete selection', () => ed.deleteSelected(), 'Del', 'Edit'),
       C('clean', 'Clean structure', () => this.clean(), 'Ctrl Shift K', 'Structure'),
       C('expand', 'Expand abbreviation label', () => this.expandSelectedLabels(), undefined, 'Structure'),
+      C('draw-h', 'Draw hydrogens as atoms (for arrows on C–H bonds)', () => this.drawHydrogenAtoms(), undefined, 'Structure'),
       C('fliph', 'Flip horizontal', () => ed.mutate('Flip', (d) => flipSelection(d, ed.sel, 'h')), undefined, 'Structure'),
       C('flipv', 'Flip vertical', () => ed.mutate('Flip', (d) => flipSelection(d, ed.sel, 'v')), undefined, 'Structure'),
       C('mirror', 'Mirror image (enantiomer)', () => ed.mutate('Mirror', (d) => flipSelection(d, ed.sel.atoms.size ? ed.sel : allSel(ed.doc), 'h', false)), undefined, 'Structure'),
@@ -767,6 +779,7 @@ export class App {
       { separator: true, label: '' },
       { label: 'Clean structure', keys: 'Ctrl ⇧ K', run: () => this.clean() },
       { label: 'Expand label', run: () => this.expandSelectedLabels() },
+      { label: 'Draw hydrogens as atoms', run: () => this.drawHydrogenAtoms() },
       { label: 'Flip horizontal', run: () => ed.mutate('Flip', (d) => flipSelection(d, ed.sel.atoms.size ? ed.sel : allSel(d), 'h')) },
       { label: 'Flip vertical', run: () => ed.mutate('Flip', (d) => flipSelection(d, ed.sel.atoms.size ? ed.sel : allSel(d), 'v')) },
       { label: 'Command palette…', keys: 'Ctrl K', run: () => this.openPalette() },
@@ -809,6 +822,7 @@ export class App {
         { label: 'Attach phenyl', keys: 'R', run: () => ed.mutate('Add phenyl', (d) => attachRingToAtom(d, id, 6, true)) },
       );
       if (a.abbrev) items.push({ label: `Expand “${a.abbrev}”`, run: () => ed.mutate('Expand label', (d) => expandLabel(d, id)) });
+      else items.push({ label: 'Draw hydrogens as atoms', run: () => this.drawHydrogenAtoms([id]) });
       items.push({ label: 'Select fragment', run: () => ed.selectFragments([id]) }, { separator: true, label: '' }, { label: 'Delete atom', keys: 'Del', run: () => ed.mutate('Delete', (d) => deleteSelection(d, { atoms: new Set([id]), bonds: new Set(), objects: new Set() })) });
     } else if (hit?.kind === 'bond') {
       const id = hit.id;

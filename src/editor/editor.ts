@@ -1131,7 +1131,7 @@ export class Editor {
     for (const c of frag.curved.values()) {
       const id = nid();
       const remap = (an: CurvedArrowObj['from']): CurvedArrowObj['from'] => {
-        if (an.type === 'atom') return { type: 'atom', id: idMap.get(an.id)! };
+        if (an.type === 'atom') return { ...an, id: idMap.get(an.id)! };
         if (an.type === 'bond') return { type: 'bond', id: idMap.get(an.id)! };
         if (an.type === 'between') return { type: 'between', a: idMap.get(an.a)!, b: idMap.get(an.b)! };
         return { type: 'point', x: an.x + dx, y: an.y + dy };

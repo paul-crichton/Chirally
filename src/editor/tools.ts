@@ -11,7 +11,7 @@ import {
 } from './ops';
 import { Pt, add, sub, mul, norm, dist, fromAngle, angleOf, snapAngle, pointInPolygon, perp, lerp, len } from '../render/geom';
 import { ChemDoc, CurvedArrowObj, Anchor } from '../doc/types';
-import { curvedGeometry } from '../render/scene';
+import { curvedGeometry, hydrogenBox } from '../render/scene';
 
 const DEG15 = Math.PI / 12;
 
@@ -1025,8 +1025,17 @@ class CurvedTool implements Tool {
   hint(): string {
     return `Drag from a lone pair (atom) or bond to the electron destination (atom, bond, or between two atoms) · Shift flips the curve · ${this.ed.settings.curved === 2 ? 'electron pair' : 'single electron (fishhook)'}`;
   }
+  /** An atom anchor, flagged `h` when the point is on the implicit hydrogens of the atom's label. */
+  private atomAnchor(id: number, p: Pt): Anchor {
+    const b = hydrogenBox(this.ed.getScene().labelBoxes, id);
+    const pad = 0.04;
+    return b && p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad ? { type: 'atom', id, h: true } : { type: 'atom', id };
+  }
+  private sameAnchor(a: Anchor | null, b: Anchor): boolean {
+    return !!a && a.type === b.type && JSON.stringify(a) === JSON.stringify(b);
+  }
   down(e: PEvent): void {
-    const an = anchorOfHit(e.hit);
+    const an = e.hit?.kind === 'atom' ? this.atomAnchor(e.hit.id, e) : anchorOfHit(e.hit);
     if (e.hit?.kind === 'curved') {
       // click on an existing curved arrow → handled in up (flip)
       this.from = null;
@@ -1047,7 +1056,11 @@ class CurvedTool implements Tool {
   private targetAnchor(e: PEvent): Anchor {
     const ed = this.ed;
     const h = ed.hitTest({ x: e.x, y: e.y }, e.touch);
-    if (h?.kind === 'atom' && !(this.from?.type === 'atom' && this.from.id === h.id)) return { type: 'atom', id: h.id };
+    if (h?.kind === 'atom') {
+      // the atom itself, or the H of its label (e.g. from the O–H bond of an "OH" to its O, or from a base to that H)
+      const an = this.atomAnchor(h.id, e);
+      if (!this.sameAnchor(this.from, an)) return an;
+    }
     if (h?.kind === 'bond' && !(this.from?.type === 'bond' && this.from.id === h.id)) return { type: 'bond', id: h.id };
     // midpoint between two non-bonded atoms → "between" (new bond target). Only pairs that make sense for the
     // arrow's source: its own atom (a lone pair forming a bond) or an atom of its bond (shifting that bond).

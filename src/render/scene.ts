@@ -543,13 +543,13 @@ function layoutLabel(mol: Mol, i: number, dirs: Pt[], h: number, st: DocStyle): 
     if (hSide === 'right') {
       runs.push({ x: mainR, y: base, text: 'H', size: fs });
       if (cnt) runs.push({ x: mainR + wH, y: base + fs * SUB_SHIFT, text: cnt, size: fs * SCRIPT_SCALE });
-      boxes.push({ x1: mainR - m * 0.3, y1: a.y - capH / 2 - m, x2: mainR + wH + wC + m, y2: a.y + capH / 2 + m * (cnt ? 2 : 1) });
+      boxes.push({ x1: mainR - m * 0.3, y1: a.y - capH / 2 - m, x2: mainR + wH + wC + m, y2: a.y + capH / 2 + m * (cnt ? 2 : 1), role: 'h' });
       rightEdge = mainR + wH + wC;
     } else if (hSide === 'left') {
       const x0 = mainL - wH - wC;
       runs.push({ x: x0, y: base, text: 'H', size: fs });
       if (cnt) runs.push({ x: x0 + wH, y: base + fs * SUB_SHIFT, text: cnt, size: fs * SCRIPT_SCALE });
-      boxes.push({ x1: x0 - m, y1: a.y - capH / 2 - m, x2: mainL + m * 0.3, y2: a.y + capH / 2 + m * (cnt ? 2 : 1) });
+      boxes.push({ x1: x0 - m, y1: a.y - capH / 2 - m, x2: mainL + m * 0.3, y2: a.y + capH / 2 + m * (cnt ? 2 : 1), role: 'h' });
       leftEdge = x0;
     } else {
       const dy = (hSide === 'down' ? 1 : -1) * fs * 1.05;
@@ -557,7 +557,7 @@ function layoutLabel(mol: Mol, i: number, dirs: Pt[], h: number, st: DocStyle): 
       const b2 = base + dy;
       runs.push({ x: x0, y: b2, text: 'H', size: fs });
       if (cnt) runs.push({ x: x0 + wH, y: b2 + fs * SUB_SHIFT, text: cnt, size: fs * SCRIPT_SCALE });
-      boxes.push({ x1: x0 - m, y1: a.y + dy - capH / 2 - m, x2: x0 + wH + wC + m, y2: a.y + dy + capH / 2 + m });
+      boxes.push({ x1: x0 - m, y1: a.y + dy - capH / 2 - m, x2: x0 + wH + wC + m, y2: a.y + dy + capH / 2 + m, role: 'h' });
     }
   }
   if (a.charge) {
@@ -898,9 +898,18 @@ export function anchorPoint(doc: ChemDoc, an: CurvedArrowObj['from']): Pt | null
   }
 }
 
+/** The box around the implicit hydrogens drawn in an atom's label, if any. */
+export function hydrogenBox(labelBoxes: Map<number, Box[]> | undefined, atomId: number): Box | undefined {
+  return labelBoxes?.get(atomId)?.find((b) => b.role === 'h');
+}
+
 export function curvedGeometry(doc: ChemDoc, c: CurvedArrowObj, labelBoxes?: Map<number, Box[]>): CurvedGeom | null {
-  const S = anchorPoint(doc, c.from);
-  const E = anchorPoint(doc, c.to);
+  // an arrow anchored to an atom's implicit H starts/ends at the H of its label
+  const hBox = (an: CurvedArrowObj['from']) => (an.type === 'atom' && an.h ? hydrogenBox(labelBoxes, an.id) : undefined);
+  const centre = (b: Box): Pt => ({ x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 });
+  const hs = hBox(c.from), he = hBox(c.to);
+  const S = hs ? centre(hs) : anchorPoint(doc, c.from);
+  const E = he ? centre(he) : anchorPoint(doc, c.to);
   if (!S || !E) return null;
   let d = sub(E, S);
   let L = len(d);
@@ -917,7 +926,9 @@ export function curvedGeometry(doc: ChemDoc, c: CurvedArrowObj, labelBoxes?: Map
   const trim = (an: CurvedArrowObj['from'], p: Pt, toward: Pt, isEnd: boolean): Pt => {
     const dir = norm(sub(toward, p));
     let r = 0;
-    if (an.type === 'atom') {
+    const hb = hBox(an);
+    if (hb) r = Math.max(0.12, (hb.y2 - hb.y1) / 2);
+    else if (an.type === 'atom') {
       const bx = labelBoxes?.get(an.id);
       r = bx ? Math.max(0.3, (bx[0].x2 - bx[0].x1) / 2 + 0.08) : isEnd ? 0.24 : 0.2;
     } else if (an.type === 'bond') r = 0.08;
