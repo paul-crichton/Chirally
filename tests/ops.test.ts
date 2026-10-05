@@ -101,6 +101,31 @@ describe('editor operations', () => {
     expect(parseAtomLabel('R1')).toMatchObject({ el: 'R', alias: 'R1' });
   });
 
+  it('parses the labels chemists type for reagents and ions', () => {
+    expect(parseAtomLabel('H2O')).toMatchObject({ el: 'O', hCount: 2, charge: 0 });
+    expect(parseAtomLabel('H3O+')).toMatchObject({ el: 'O', hCount: 3, charge: 1 });
+    expect(parseAtomLabel('HO-')).toMatchObject({ el: 'O', hCount: 1, charge: -1 });
+    expect(parseAtomLabel('HO−')).toMatchObject({ el: 'O', hCount: 1, charge: -1 });
+    expect(parseAtomLabel('HCl')).toMatchObject({ el: 'Cl', hCount: 1, charge: 0 });
+    expect(parseAtomLabel('Hg')).toMatchObject({ el: 'Hg' }); // elements still win
+    expect(parseAtomLabel('Br+')).toMatchObject({ el: 'Br', hCount: 0, charge: 1 });
+    expect(parseAtomLabel('I+')).toMatchObject({ el: 'I', hCount: 0, charge: 1 });
+    expect(parseAtomLabel('N+')!.hCount).toBeUndefined();
+    expect(parseAtomLabel('CN-')).toMatchObject({ abbrev: 'CN', charge: -1 });
+    expect(parseAtomLabel('NC-')).toMatchObject({ abbrev: 'CN', charge: -1 });
+    expect(parseAtomLabel('MeO-')).toMatchObject({ abbrev: 'OMe', charge: -1 });
+    expect(parseAtomLabel('AcO−')).toMatchObject({ abbrev: 'OAc', charge: -1 });
+    expect(parseAtomLabel('E+')).toMatchObject({ el: 'R', alias: 'E', charge: 1 });
+    expect(parseAtomLabel('Nu-')).toMatchObject({ el: 'R', alias: 'Nu', charge: -1 });
+  });
+
+  it('a charged label keeps its charge when expanded', () => {
+    const d = createDoc();
+    const a = addAtom(d, { el: 'C', x: 0, y: 0 });
+    Object.assign(a, parseAtomLabel('MeO-'));
+    expect(smi(d)).toBe(writeSmilesOf('C[O-]'));
+  });
+
   it('abbreviation labels expand for SMILES', () => {
     const d = createDoc();
     placeRing(d, { x: 0, y: 0 }, 6, true);

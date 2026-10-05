@@ -194,14 +194,15 @@ export function expandLabel(doc: ChemDoc, atomId: number): boolean {
   for (let k = 1; k < g.atoms.length; k++) mol.atoms.push({ ...g.atoms[k], id: -k, x: 0, y: 0 });
   for (const b of g.bonds) mol.bonds.push({ ...b, id: -1, a: b.a === 0 ? ai : off + b.a - 1, b: b.b === 0 ? ai : off + b.b - 1 });
   const att = g.atoms[0];
-  mol.atoms[ai] = { ...mol.atoms[ai], el: att.el, charge: att.charge, hCount: att.hCount, abbrev: undefined };
+  const charge = att.charge + (a.charge || 0); // the label's own charge sits on the attachment atom
+  mol.atoms[ai] = { ...mol.atoms[ai], el: att.el, charge, hCount: att.hCount, abbrev: undefined };
   mol.invalidate();
   const fixed = new Set<number>();
   for (let i = 0; i < off; i++) fixed.add(i);
   layoutMol(mol, { fixed });
   // write back
   a.el = att.el;
-  a.charge = att.charge;
+  a.charge = charge;
   if (att.hCount !== undefined) a.hCount = att.hCount;
   else delete a.hCount;
   delete a.abbrev;

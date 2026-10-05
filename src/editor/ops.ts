@@ -6,7 +6,7 @@ import {
 import { BondStyle, Mol } from '../chem/mol';
 import { Pt, add, sub, mul, norm, len, dist, fromAngle, angleOf, perp, rotate, lerp } from '../render/geom';
 import { element, ISOTOPE_ALIASES } from '../chem/elements';
-import { findAbbreviation, parseCondensedLabel } from '../chem/abbreviations';
+import { findAbbreviation, parseCondensedLabel, reverseLabel } from '../chem/abbreviations';
 
 export const MERGE_TOL = 0.25;
 
@@ -150,6 +150,15 @@ export function applyBondType(b: DocBond, order: number, style: BondStyle): void
 }
 
 /** Parses typed atom label text into atom properties. Returns null if not understood as chemistry. */
+const PSEUDO_LABEL = /^(R\d*'*|R[a-z]|Ar|X\d*|Y|Z|Nu|E|LG|PG|Pg|M|L|Hal|A|Q|G\d*)$/;
+
+/** "+", "2-", "−", "3+" → signed charge. */
+function chargeOf(s: string): number {
+  const sgn = /[\-−]/.test(s) ? -1 : 1;
+  const num = s.replace(/[+\-−]/, '');
+  return sgn * (num ? +num : 1);
+}
+
 export function parseAtomLabel(text: string): Partial<DocAtom> | null {
   const t = text.trim();
   if (!t) return null;
@@ -165,19 +174,31 @@ export function parseAtomLabel(text: string): Partial<DocAtom> | null {
     if (element(el)) {
       const out: Partial<DocAtom> = { el, isotope, abbrev: undefined, alias: undefined };
       if (m[3] !== undefined) out.hCount = m[3] === '' ? 1 : +m[3];
-      if (m[4]) {
-        const sgn = /[\-−]/.test(m[4]) ? -1 : 1;
-        const num = m[4].replace(/[+\-−]/, '');
-        out.charge = sgn * (num ? +num : 1);
-      } else out.charge = 0;
+      out.charge = m[4] ? chargeOf(m[4]) : 0;
+      // a halogen cation typed without H is the bare cation (Br⁺), not H₂Br⁺
+      if (out.charge > 0 && m[3] === undefined && element(el)!.group === 17) out.hCount = 0;
       return out;
     }
+  }
+  // formulas written hydrogens first: H2O, H3O+, HO-, H2N-, HCl
+  const f = /^H(\d*)([A-Z][a-z]?)(\d*[+\-−]|[+\-−]\d*)?$/.exec(t);
+  if (f && f[2] !== 'H' && element(f[2])) {
+    return { el: f[2], hCount: f[1] ? +f[1] : 1, charge: f[3] ? chargeOf(f[3]) : 0, abbrev: undefined, alias: undefined, isotope: undefined };
   }
   const ab = findAbbreviation(t);
   if (ab) return { abbrev: ab, el: 'C', charge: 0, alias: undefined, hCount: undefined, isotope: undefined };
   if (parseCondensedLabel(t)) return { abbrev: t, el: 'C', charge: 0, alias: undefined, hCount: undefined };
+  const signed = /^(.+?)(\d*[+\-−]|[+\-−]\d*)$/.exec(t);
+  if (signed) {
+    // charged groups: CN-, MeO-, AcO-, OMe- (N≡C⁻ written either way round is cyanide)
+    const stem = signed[1] === 'NC' ? 'CN' : signed[1];
+    const key = findAbbreviation(stem) ?? findAbbreviation(reverseLabel(stem));
+    if (key) return { abbrev: key, el: 'C', charge: chargeOf(signed[2]), alias: undefined, hCount: undefined, isotope: undefined };
+    // charged generic atoms: E+, Nu-, X-
+    if (PSEUDO_LABEL.test(signed[1])) return { el: 'R', alias: signed[1], abbrev: undefined, charge: chargeOf(signed[2]), hCount: undefined };
+  }
   // generic pseudo atoms: R, R1, R', Ar, X, Y, Z, Nu, E, LG, Pg…
-  if (/^(R\d*'*|R[a-z]|Ar|X\d*|Y|Z|Nu|E\+?|LG|PG|Pg|M|L|Hal|A|Q|G\d*)$/.test(t) || t.length <= 6) {
+  if (PSEUDO_LABEL.test(t) || t.length <= 6) {
     return { el: 'R', alias: t, abbrev: undefined, charge: 0, hCount: undefined };
   }
   return null;

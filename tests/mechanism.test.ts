@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { createDoc, addAtom, addBond, insertMol } from '../src/doc/document';
+import { parseAtomLabel } from '../src/editor/ops';
+import { buildScene, chargeText } from '../src/render/scene';
+import { expandAbbreviations } from '../src/chem/abbreviations';
 import { applyArrows, arrowGroups, octetViolations, placeStep } from '../src/doc/mechanism';
 import { parseSmiles, writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { ChemDoc, Anchor } from '../src/doc/types';
@@ -347,6 +350,107 @@ describe('rings drawn with delocalised (aromatic) bonds', () => {
     const h = addAtom(doc, { el: 'H', x: 2, y: 0, charge: 1 }).id;
     const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(h)), arrow(doc, atomA(ids[0]), atomA(ids[0]))]);
     expect(r.warnings.some((w) => w.level === 'error' && /Kekulé/.test(w.message))).toBe(true);
+  });
+});
+
+describe('labels, generic atoms and charge conservation', () => {
+  const labelled = (doc: ChemDoc, label: string, x: number, y: number) => {
+    const a = addAtom(doc, { el: 'C', x, y });
+    Object.assign(a, parseAtomLabel(label));
+    return a.id;
+  };
+  const expanded = (r: { product: Mol }) => writeSmiles(suppressHydrogens(expandAbbreviations(r.product)));
+
+  it('a methoxide drawn as an OMe⁻ label does an SN2 and stays a label', () => {
+    const doc = createDoc();
+    const ome = labelled(doc, 'MeO-', 0, 0);
+    const [c, br] = put(doc, 'CBr', 2);
+    const r = applyArrows(doc, [arrow(doc, atomA(ome), atomA(c)), arrow(doc, { type: 'bond', id: bondId(doc, c, br) }, atomA(br))]);
+    expect(r.warnings).toEqual([]);
+    const lab = r.product.atoms.find((a) => a.id === ome)!;
+    expect(lab).toMatchObject({ abbrev: 'OMe', charge: 0 });
+    expect(expanded(r).split('.').sort()).toEqual([canon('COC'), '[Br-]'].sort());
+  });
+
+  it('an OMe leaving group leaves as methoxide', () => {
+    const doc = createDoc();
+    const L = draw(doc, { Me: ['C', 0, 0], C: ['C', 1, 0], O: ['O', 1, -1, -1], OH: ['O', 1, 1] }, [['Me', 'C'], ['C', 'O'], ['C', 'OH']]);
+    const ome = labelled(doc, 'OMe', 2, 0);
+    addBond(doc, L.C, ome);
+    const r = applyArrows(doc, [arrow(doc, atomA(L.O), { type: 'bond', id: bondId(doc, L.C, L.O) }), arrow(doc, { type: 'bond', id: bondId(doc, L.C, ome) }, atomA(ome))]);
+    expect(r.warnings).toEqual([]);
+    expect(r.product.atoms.find((a) => a.id === ome)).toMatchObject({ abbrev: 'OMe', charge: -1 });
+    expect(expanded(r).split('.').sort()).toEqual([canon('CC(=O)O'), canon('C[O-]')].sort());
+  });
+
+  it('points out that arrows cannot reach inside a label', () => {
+    const doc = createDoc();
+    const [me] = put(doc, 'C', 0);
+    const co2h = labelled(doc, 'CO2H', 1, 0);
+    addBond(doc, me, co2h);
+    const o = addAtom(doc, { el: 'O', x: 1, y: -2, charge: -1 }).id;
+    const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(co2h))]);
+    expect(r.ok).toBe(false);
+    expect(r.warnings.some((w) => /expand it/.test(w.message))).toBe(true);
+  });
+
+  it('typed reagents take part as real atoms: H2O and CN⁻', () => {
+    const doc = createDoc();
+    const w = labelled(doc, 'H2O', 0, 0);
+    const [m1, cp, m2, m3] = put(doc, 'C[C+](C)C', 2);
+    const r = applyArrows(doc, [arrow(doc, atomA(w), atomA(cp))]);
+    expect(r.warnings).toEqual([]);
+    expect(productOf(r)).toBe(canon('CC(C)(C)[OH2+]'));
+    void [m1, m2, m3];
+
+    const doc2 = createDoc();
+    const cn = labelled(doc2, 'CN-', 0, 0);
+    const ids = put(doc2, 'CC(C)=O', 2);
+    const r2 = applyArrows(doc2, [arrow(doc2, atomA(cn), atomA(ids[1])), arrow(doc2, { type: 'bond', id: bondId(doc2, ids[1], ids[3]) }, atomA(ids[3]))]);
+    expect(r2.warnings).toEqual([]);
+    expect(expanded(r2)).toBe(canon('CC(C)([O-])C#N'));
+  });
+
+  it('a generic E⁺ electrophile bonds and becomes neutral', () => {
+    const doc = createDoc();
+    const ids = put(doc, 'C1=CC=CC=C1', 0);
+    const e = labelled(doc, 'E+', 0, -2);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, ids[0], ids[1]) }, atomA(e))]);
+    expect(r.warnings).toEqual([]);
+    expect(r.product.atoms.find((a) => a.id === e)!.charge).toBe(0);
+    expect(r.product.atoms.reduce((s, a) => s + a.charge, 0)).toBe(1);
+  });
+
+  it('breaking a dative bond moves no electrons; hydrogen bonds are kept', () => {
+    const doc = createDoc();
+    const L = draw(doc, { P: ['P', 0, 0], A: ['C', -1, 0], B: ['C', 0, 1], C: ['C', 0, -1], Pd: ['Pd', 1.5, 0] }, [['P', 'A'], ['P', 'B'], ['P', 'C']]);
+    addBond(doc, L.P, L.Pd, 1, 'dative');
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bondId(doc, L.P, L.Pd) }, atomA(L.P))]);
+    expect(r.warnings).toEqual([]);
+    expect(r.product.atoms.every((a) => !a.charge)).toBe(true);
+    expect(r.product.bonds.some((b) => b.style === 'dative')).toBe(false);
+
+    const doc2 = createDoc();
+    const M = draw(doc2, { O: ['O', 0, 0], H: ['H', 1, 0, 1], W: ['O', 3, 0], C: ['C', 4, 0], O2: ['O', 5, 0] }, [['C', 'O2', 2]]);
+    addBond(doc2, M.H, M.W, 0, 'hbond');
+    const r2 = applyArrows(doc2, [arrow(doc2, atomA(M.O), atomA(M.H))]);
+    expect(r2.product.bonds.some((b) => b.style === 'hbond')).toBe(true);
+  });
+
+  it('flags steps that would change the total charge', () => {
+    const doc = createDoc();
+    const [c, n] = put(doc, '[C-]#N', 0);
+    const r = applyArrows(doc, [arrow(doc, atomA(c), { type: 'bond', id: bondId(doc, c, n) })]);
+    expect(r.warnings.some((w) => w.level === 'error' && /total charge/.test(w.message))).toBe(true);
+  });
+
+  it('draws the charge of labels and generic atoms', () => {
+    const doc = createDoc();
+    labelled(doc, 'MeO-', 0, 0);
+    labelled(doc, 'E+', 3, 0);
+    const texts = buildScene(doc, { ink: '#000' }).prims.filter((q) => q.k === 'text').map((q) => (q as { text: string }).text);
+    expect(texts).toContain(chargeText(-1));
+    expect(texts).toContain(chargeText(1));
   });
 });
 

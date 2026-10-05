@@ -244,7 +244,7 @@ export function expandAbbreviations(input: Mol): Mol {
     const newIdx = (gi: number) => (gi === 0 ? i : off + gi - 1);
     for (const b of g.bonds) mol.bonds.push({ ...b, id: -1, a: newIdx(b.a), b: newIdx(b.b) });
     a.el = att.el;
-    a.charge = att.charge;
+    a.charge = att.charge + (a.charge || 0); // the label's own charge sits on the attachment atom
     a.isotope = att.isotope;
     if (att.hCount !== undefined) a.hCount = att.hCount;
     else delete a.hCount;

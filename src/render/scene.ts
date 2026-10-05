@@ -504,6 +504,13 @@ function layoutLabel(mol: Mol, i: number, dirs: Pt[], h: number, st: DocStyle): 
       runs.push({ x, y, text: r.text, size });
       x += widths[k];
     });
+    if (a.charge) {
+      // charge after the label: OMe⁻, E⁺
+      const txt = chargeText(a.charge);
+      const size = fs * SCRIPT_SCALE;
+      runs.push({ x, y: base - fs * SUP_SHIFT, text: txt, size });
+      x += measureText(txt, size, fam);
+    }
     boxes.push({ x1: x0 - m, y1: a.y - capH / 2 - m, x2: x + m, y2: a.y + capH / 2 + m * 1.6 });
     return { runs, boxes, hSide: null };
   }
