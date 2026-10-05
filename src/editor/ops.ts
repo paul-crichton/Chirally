@@ -8,7 +8,7 @@ import { freeAngles } from '../render/scene';
 import { BondStyle, Mol } from '../chem/mol';
 import { Pt, add, sub, mul, norm, len, dist, fromAngle, angleOf, perp, rotate, lerp } from '../render/geom';
 import { element, ISOTOPE_ALIASES } from '../chem/elements';
-import { ABBREVIATIONS, findAbbreviation, parseCondensedLabel, reverseLabel, labelOffsetForNet, labelDisplayCharge } from '../chem/abbreviations';
+import { ABBREVIATIONS, findAbbreviation, parseCondensedLabel, reverseLabel, labelOffsetForNet, labelDisplayCharge, chargeSuffix } from '../chem/abbreviations';
 
 export const MERGE_TOL = 0.25;
 
@@ -235,8 +235,7 @@ export function parseAtomLabel(text: string): Partial<DocAtom> | null {
 export function labelText(a: DocAtom, bonded: boolean): string {
   const text = a.abbrev ?? a.alias;
   if (!text) return '';
-  const q = a.abbrev ? labelDisplayCharge(a.abbrev, a.charge, bonded) : a.charge || 0;
-  return text + (q === 0 ? '' : (Math.abs(q) > 1 ? String(Math.abs(q)) : '') + (q > 0 ? '+' : '-'));
+  return text + chargeSuffix(a.abbrev ? labelDisplayCharge(a.abbrev, a.charge, bonded) : a.charge || 0);
 }
 
 export function setAtomLabel(doc: ChemDoc, atomId: number, text: string): boolean {
@@ -266,12 +265,19 @@ export function drawHydrogens(doc: ChemDoc, atomIds: Iterable<number>): number {
     const k = implicitH(mol, index.get(id)!);
     if (k < 1) continue;
     const occupied = nbrs.map((n) => angleOf(sub(doc.atoms.get(n)!, a)));
+    const hs: { atom: number; bond: number }[] = [];
     for (const ang of freeAngles(occupied, k, occupied.length ? occupied[0] + Math.PI : -Math.PI / 2)) {
       const h = addAtom(doc, { el: 'H', x: a.x + Math.cos(ang) * 0.8, y: a.y + Math.sin(ang) * 0.8 });
-      addBond(doc, id, h.id);
+      hs.push({ atom: h.id, bond: addBond(doc, id, h.id).id });
       added++;
     }
-    delete a.hCount;
+    // every hydrogen is drawn now: an explicit count goes to 0 (it would otherwise add them again)
+    if (a.hCount !== undefined) a.hCount = 0;
+    // arrows that started or ended on the label's H now use the first drawn H (its bond as a source)
+    for (const c of doc.curved.values()) {
+      if (c.from.type === 'atom' && c.from.id === id && c.from.h) c.from = { type: 'bond', id: hs[0].bond };
+      if (c.to.type === 'atom' && c.to.id === id && c.to.h) c.to = { type: 'atom', id: hs[0].atom };
+    }
   }
   return added;
 }

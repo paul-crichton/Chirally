@@ -110,6 +110,21 @@ export function pruneCurved(doc: ChemDoc): void {
     return true;
   };
   for (const [id, c] of [...doc.curved]) if (!ok(c.from) || !ok(c.to)) doc.curved.delete(id);
+  // a step whose reaction arrow is gone is no longer applied (and its id may be handed out again)
+  for (const c of doc.curved.values()) if (c.step !== undefined && !doc.arrows.has(c.step)) delete c.step;
+}
+
+/** Where an atom's implicit hydrogen is drawn for a curved arrow anchored on it: beside the atom, away from its bonds. */
+export function implicitHydrogenPoint(doc: ChemDoc, atomId: number): { x: number; y: number } | null {
+  const a = doc.atoms.get(atomId);
+  if (!a) return null;
+  let dx = 0, dy = 0;
+  for (const b of doc.bonds.values()) {
+    const o = b.a === atomId ? doc.atoms.get(b.b) : b.b === atomId ? doc.atoms.get(b.a) : undefined;
+    if (o) (dx += a.x - o.x), (dy += a.y - o.y);
+  }
+  const l = Math.hypot(dx, dy);
+  return l > 1e-6 ? { x: a.x + (dx / l) * 0.55, y: a.y + (dy / l) * 0.55 } : { x: a.x, y: a.y - 0.55 };
 }
 
 /** Connected fragments as lists of atom ids. */

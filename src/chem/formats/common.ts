@@ -4,7 +4,7 @@ import { Atom, Mol, TetraSpec, DbSpec } from '../mol';
 import { BY_SYMBOL, ELEMENTS } from '../elements';
 import { implicitH } from '../valence';
 import { kekulize } from '../aromaticity';
-import { findAbbreviation, parseCondensedLabel, abbreviationMol, reverseLabel } from '../abbreviations';
+import { findAbbreviation, parseCondensedLabel, abbreviationMol, reverseLabel, labelOffsetForNet } from '../abbreviations';
 import { perceiveStereo2D, isPotentialStereocenter, ccwFromPositions } from '../stereo2d';
 import { perceiveRings, smallestRingSizeOfBond } from '../rings';
 import { symmetryClasses } from '../canon';
@@ -171,19 +171,49 @@ export function elementByNumber(z: number): string | null {
 export function applyAlias(a: Atom, alias: string): void {
   const label = alias.trim();
   if (!label) return;
-  // "OH", "NH2" (or reversed "HO", "H2N") on the matching element are plain element labels
-  for (const l of [label, reverseLabel(label)]) {
-    const own = /^([A-Z][a-z]?)(?:H\d*)?$/.exec(l);
-    if (own && own[1] === a.el && BY_SYMBOL.has(a.el)) return;
+  // a known ion ("N3-" azide) is read as written, not as an element with a charge
+  const signed = findAbbreviation(label) ? null : splitLabelCharge(label);
+  // "OH", "NH2", "O-" (or reversed "HO", "H2N") on the matching element are plain element labels
+  for (const [text, q] of [[label, undefined], ...(signed ? [signed] : [])] as [string, number | undefined][]) {
+    for (const l of [text, reverseLabel(text)]) {
+      const own = /^([A-Z][a-z]?)(?:H\d*)?$/.exec(l);
+      if (own && own[1] === a.el && BY_SYMBOL.has(a.el)) {
+        if (q !== undefined) a.charge = q;
+        return;
+      }
+    }
   }
-  if (/^R\d*$|^R'+$/.test(label) || !setAbbrev(a, label)) {
-    a.el = 'R';
-    a.alias = label;
-    a.charge = 0;
-    delete a.isotope;
-    delete a.hCount;
-    delete a.abbrev;
+  const generic = (l: string) => /^R\d*$|^R'+$/.test(l);
+  // an unsigned label keeps the atom's charge: the offset from the group, as Chirally writes it
+  const charge = a.charge || 0;
+  if (!generic(label) && setAbbrev(a, label)) {
+    a.charge = charge;
+    return;
   }
+  if (signed && !generic(signed[0]) && setAbbrev(a, signed[0])) {
+    a.charge = labelOffsetForNet(a.abbrev!, signed[1]);
+    return;
+  }
+  a.el = 'R';
+  a.alias = signed ? signed[0] : label;
+  a.charge = signed ? signed[1] : charge; // E+, Nu-
+  delete a.isotope;
+  delete a.hCount;
+  delete a.abbrev;
+}
+
+/**
+ * Splits a charge written after a label: "OMe-" → ["OMe", -1], "E+" → ["E", 1], "SO4 2-" → ["SO4", -2].
+ * A single sign is taken first, so "R1-" is R1 with −1. Null when the label has no trailing sign.
+ */
+export function splitLabelCharge(label: string): [string, number] | null {
+  const m = /^(.*?[^\s+\-−])\s*(\d*)([+\-−])$/.exec(label.trim());
+  if (!m) return null;
+  const sign = m[3] === '+' ? 1 : -1;
+  // "R1-" / "NMe3+": digits belong to the label unless separated ("SO4 2-") or the label is a lone element ("Fe3+")
+  const spaced = /\s\d+[+\-−]$/.test(label.trim());
+  if (m[2] && (spaced || BY_SYMBOL.has(m[1]))) return [m[1], sign * Number(m[2])];
+  return [m[1] + m[2], sign];
 }
 
 /**

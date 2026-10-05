@@ -194,6 +194,11 @@ export function labelDisplayCharge(label: string, offset: number, bonded: boolea
   return templateCharge(g) - g.atoms[0].charge + attachmentCharge(g, offset, bonded, label);
 }
 
+/** "+", "-", "2+", … as written after a label (ASCII, so it can be typed back). */
+export function chargeSuffix(q: number): string {
+  return q === 0 ? '' : (Math.abs(q) > 1 ? String(Math.abs(q)) : '') + (q > 0 ? '+' : '-');
+}
+
 /** The offset to store for a label typed with net charge `net` (the inverse of labelDisplayCharge for a bonded label). */
 export function labelOffsetForNet(label: string, net: number): number {
   const g = abbreviationMol(label);

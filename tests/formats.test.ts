@@ -3,7 +3,7 @@ import { Mol } from '../src/chem/mol';
 import { parseSmiles, writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { computeFormula } from '../src/chem/formula';
 import { perceiveStereo2D } from '../src/chem/stereo2d';
-import { createDoc, addAtom, addBond, insertMol, newId } from '../src/doc/document';
+import { createDoc, addAtom, addBond, insertMol, newId, docToMol } from '../src/doc/document';
 import type { ChemDoc, ArrowKind } from '../src/doc/types';
 import {
   readMolfile, writeMolfile, readSDF, writeSDF, hasCoordinates, readRxn, writeRxn, readCDXML, writeCDXML,
@@ -1108,5 +1108,69 @@ describe('robustness', () => {
       }
     }
     expect(Date.now() - t0).toBeLessThan(ms(20000));
+  });
+});
+
+describe('label charges and H-anchored arrows survive export', () => {
+  /** A drawing with charged labels: methoxide, a phosphonium, a free PPh3, an electrophile E+ and a nucleophile Nu-. */
+  function labelled(): ChemDoc {
+    const doc = createDoc();
+    const c = addAtom(doc, { el: 'C', x: 0, y: 0 });
+    const ome = addAtom(doc, { el: 'O', x: 1, y: 0, abbrev: 'OMe', charge: -1 }); // bonded methoxide: offset −1
+    addBond(doc, c.id, ome.id);
+    const c2 = addAtom(doc, { el: 'C', x: 0, y: 2 });
+    const pph3 = addAtom(doc, { el: 'P', x: 1, y: 2, abbrev: 'PPh3', charge: 0 }); // bonded phosphonium, net +1
+    addBond(doc, c2.id, pph3.id);
+    addAtom(doc, { el: 'P', x: 4, y: 0, abbrev: 'PPh3', charge: 0 }); // free triphenylphosphine, neutral
+    addAtom(doc, { el: 'R', x: 4, y: 2, alias: 'E', charge: 1 });
+    addAtom(doc, { el: 'R', x: 4, y: 4, alias: 'Nu', charge: -1 });
+    return doc;
+  }
+  const sig = (d: ChemDoc) => [...d.atoms.values()].map((a) => [a.el, a.abbrev ?? a.alias ?? '', a.charge]);
+
+  it('CDXML writes the net charge after the label and reads it back', () => {
+    const doc = labelled();
+    const xml = writeCDXML(doc);
+    expect(xml).toContain('>OMe-<');
+    expect(xml).toContain('>PPh3+<');
+    expect(xml).toContain('>E+<');
+    expect(xml).toContain('>Nu-<');
+    expect(sig(readCDXML(xml))).toEqual(sig(doc));
+  });
+
+  it('MOL and CML keep the charge of label and generic atoms', () => {
+    const { mol } = docToMol(labelled());
+    const labels = (m: Mol) => m.atoms.map((a) => [a.abbrev ?? a.alias ?? '', a.charge]).filter(([l]) => l);
+    expect(labels(readMolfile(writeMolfile(mol, { expandAbbreviations: false })))).toEqual([['OMe', -1], ['PPh3', 0], ['PPh3', 0], ['E', 1], ['Nu', -1]]);
+    // CML writes groups expanded: methoxide O⁻, phosphonium P⁺, neutral free PPh3
+    const cml = readCML(writeCML(mol))[0];
+    expect(labels(cml)).toEqual([['E', 1], ['Nu', -1]]);
+    expect(cml.atoms.filter((a) => a.el === 'O' || a.el === 'P').map((a) => a.charge)).toEqual([-1, 1, 0]);
+  });
+
+  it('an alias written with its sign sets the charge', () => {
+    const m = readMolfile(['', '  test', '', '  2  1  0  0  0  0  0  0  0  0999 V2000',
+      '    0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+      '    1.5000    0.0000    0.0000 R   0  0  0  0  0  0  0  0  0  0  0  0',
+      '  1  2  1  0  0  0  0', 'A    2', 'OMe-', 'M  END', ''].join('\n'));
+    expect([m.atoms[1].abbrev, m.atoms[1].charge]).toEqual(['OMe', -1]);
+    const g = readMolfile(['', '  test', '', '  1  0  0  0  0  0  0  0  0  0999 V2000',
+      '    0.0000    0.0000    0.0000 R   0  0  0  0  0  0  0  0  0  0  0  0', 'A    1', 'E+', 'M  END', ''].join('\n'));
+    expect([g.atoms[0].alias, g.atoms[0].charge]).toEqual(['E', 1]);
+  });
+
+  it('an arrow from an implicit O–H to its O keeps its length in CDXML', () => {
+    const doc = createDoc();
+    const c = addAtom(doc, { el: 'C', x: 0, y: 0 });
+    const o = addAtom(doc, { el: 'O', x: 1, y: 0 });
+    addBond(doc, c.id, o.id);
+    const id = newId(doc);
+    doc.curved.set(id, { id, type: 'curved', electrons: 2, from: { type: 'atom', id: o.id, h: true }, to: { type: 'atom', id: o.id }, c1: { t: 0.25, h: -0.5 }, c2: { t: 0.75, h: -0.5 } });
+    const back = readCDXML(writeCDXML(doc));
+    const arrow = [...back.curved.values()][0];
+    expect(arrow.from.type).toBe('point');
+    expect(arrow.to.type).toBe('point');
+    const p = arrow.from as { x: number; y: number }, q = arrow.to as { x: number; y: number };
+    expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(0.3);
   });
 });

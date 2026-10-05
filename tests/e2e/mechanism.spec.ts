@@ -142,3 +142,23 @@ test('arrows can start and end on the H of an OH label', async ({ page }) => {
   await page.screenshot({ path: 'test-results/mechanism-h-anchor.png' });
 });
 
+
+test('the preview survives a theme change and can still be inserted', async ({ page }) => {
+  await drawIncompleteAddition(page);
+  const before = await atomCount(page);
+  await page.getByRole('button', { name: /Apply arrows/ }).click();
+  expect(await hasGhost(page)).toBe(true);
+  await page.getByRole('button', { name: 'Toggle dark mode' }).first().click();
+  expect(await hasGhost(page)).toBe(true);
+  await page.getByRole('button', { name: 'Insert anyway' }).click();
+  expect(await atomCount(page)).toBe(before + 4);
+});
+
+test('applying from another tab opens the Mechanism tab when the step needs attention', async ({ page }) => {
+  await drawIncompleteAddition(page);
+  await page.locator('.tab', { hasText: 'Analysis' }).click();
+  await expect(page.locator('.mech-pending')).toBeHidden();
+  await page.evaluate(() => (window as any).chirally.mechanismPanel.applyStep());
+  await expect(page.getByRole('button', { name: 'Insert anyway' })).toBeVisible();
+  await expect(page.locator('.mech-warnings .err')).toContainText(['10 valence electrons']);
+});

@@ -268,8 +268,31 @@ describe('drawHydrogens', () => {
     const o = addAtom(d, { el: 'O', x: 0, y: 0 });
     Object.assign(o, parseAtomLabel('H3O+'));
     expect(drawHydrogens(d, [o.id])).toBe(3);
-    expect(d.atoms.get(o.id)!.hCount).toBeUndefined();
+    expect(d.atoms.get(o.id)!.hCount).toBe(0);
     expect(smi(d)).toBe(writeSmilesOf('[OH3+]'));
+  });
+
+  it('keeps an explicit low H count (a carbene CH2 stays CH2)', () => {
+    const d = createDoc();
+    const c = addAtom(d, { el: 'C', x: 0, y: 0, hCount: 2 });
+    expect(drawHydrogens(d, [c.id])).toBe(2);
+    expect(smi(d)).toBe(writeSmilesOf('[CH2]'));
+  });
+
+  it('moves arrows anchored on the label H onto the drawn H', () => {
+    const d = createDoc();
+    const c = addAtom(d, { el: 'C', x: 0, y: 0 });
+    const o = addAtom(d, { el: 'O', x: 1, y: 0 });
+    addBond(d, c.id, o.id);
+    const n = addAtom(d, { el: 'N', x: 3, y: 0 });
+    const a1 = d.nextId++, a2 = d.nextId++;
+    d.curved.set(a1, { id: a1, type: 'curved', electrons: 2, from: { type: 'atom', id: n.id }, to: { type: 'atom', id: o.id, h: true }, c1: { t: 0.3, h: -0.4 }, c2: { t: 0.7, h: -0.4 } });
+    d.curved.set(a2, { id: a2, type: 'curved', electrons: 2, from: { type: 'atom', id: o.id, h: true }, to: { type: 'atom', id: o.id }, c1: { t: 0.3, h: -0.4 }, c2: { t: 0.7, h: -0.4 } });
+    drawHydrogens(d, [o.id]);
+    const h = [...d.atoms.values()].find((x) => x.el === 'H')!;
+    expect(d.curved.get(a1)!.to).toEqual({ type: 'atom', id: h.id });
+    const bond = [...d.bonds.values()].find((b) => b.a === o.id && b.b === h.id)!;
+    expect(d.curved.get(a2)!.from).toEqual({ type: 'bond', id: bond.id });
   });
 });
 

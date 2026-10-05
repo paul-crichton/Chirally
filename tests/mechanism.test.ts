@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { createDoc, addAtom, addBond, insertMol } from '../src/doc/document';
+import { createDoc, addAtom, addBond, insertMol, docToJSON, docFromJSON } from '../src/doc/document';
 import { parseAtomLabel } from '../src/editor/ops';
 import { buildScene, chargeText } from '../src/render/scene';
 import { expandAbbreviations } from '../src/chem/abbreviations';
 import { perceiveStereo2D } from '../src/chem/stereo2d';
 import { assignCIP } from '../src/chem/cip';
-import { applyArrows, arrowGroups, octetViolations, placeStep } from '../src/doc/mechanism';
+import { applyArrows, arrowGroups, octetViolations, placeStep, isApplied } from '../src/doc/mechanism';
 import { parseSmiles, writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { ChemDoc, Anchor } from '../src/doc/types';
 import { Mol } from '../src/chem/mol';
@@ -673,3 +673,55 @@ describe('review fixes: bonds, stereo, labels and generic atoms', () => {
   });
 });
 
+describe('review fixes: layout', () => {
+  const closestNonBonded = (m: Mol, els: string[]) => {
+    let best = Infinity;
+    for (let i = 0; i < m.atoms.length; i++)
+      for (let j = i + 1; j < m.atoms.length; j++) {
+        if (!els.includes(m.atoms[i].el) || !els.includes(m.atoms[j].el) || m.bondBetween(i, j) >= 0) continue;
+        best = Math.min(best, Math.hypot(m.atoms[i].x - m.atoms[j].x, m.atoms[i].y - m.atoms[j].y));
+      }
+    return best;
+  };
+
+  it('opening a protonated epoxide keeps the two oxygens apart', () => {
+    const doc = createDoc();
+    const L = draw(doc, { C1: ['C', 0, 0], C2: ['C', 1, 0], O: ['O', 0.5, -0.866, 1], Me: ['C', 1.87, 0.5], W: ['O', 2.2, -0.9] }, [['C1', 'C2'], ['C2', 'O'], ['C1', 'O'], ['C2', 'Me']]);
+    doc.atoms.get(L.O)!.hCount = 1;
+    const r = applyArrows(doc, [arrow(doc, atomA(L.W), atomA(L.C2)), arrow(doc, { type: 'bond', id: bondId(doc, L.C2, L.O) }, atomA(L.O))]);
+    expect(r.ok).toBe(true);
+    const p = placeStep(doc, r)!;
+    expect(closestNonBonded(p.mol, ['O'])).toBeGreaterThan(1.3);
+  });
+
+  it('the step arrow starts after a wide label on the right of the reactants', () => {
+    const doc = createDoc();
+    const a = addAtom(doc, { el: 'C', x: -3, y: 0 });
+    const b = addAtom(doc, { el: 'C', x: -2, y: 0 });
+    Object.assign(a, parseAtomLabel('OtBu'));
+    Object.assign(b, parseAtomLabel('OtBu'));
+    addBond(doc, a.id, b.id);
+    const bid = bondId(doc, a.id, b.id);
+    const r = applyArrows(doc, [arrow(doc, { type: 'bond', id: bid }, atomA(a.id), 1), arrow(doc, { type: 'bond', id: bid }, atomA(b.id), 1)]);
+    expect(r.ok).toBe(true);
+    const p = placeStep(doc, r)!;
+    expect(p.arrow.x1).toBeGreaterThan(-2 + 1.2);
+  });
+});
+
+
+describe('review fixes: applied steps', () => {
+  it('a step whose reaction arrow was deleted is forgotten on reload, so its id cannot mark it applied again', () => {
+    const doc = createDoc();
+    const [o, c] = put(doc, '[OH-].CBr', 0);
+    arrow(doc, { type: 'atom', id: o }, { type: 'between', a: o, b: c + 1 });
+    const step = doc.nextId + 50; // the deleted step's arrow had the highest id in the drawing
+    for (const cv of doc.curved.values()) cv.step = step;
+    expect(isApplied(doc, [...doc.curved.values()][0])).toBe(false);
+    const back = docFromJSON(docToJSON(doc));
+    expect([...back.curved.values()].every((cv) => cv.step === undefined)).toBe(true);
+    // a new reaction arrow taking that id leaves the arrows unapplied
+    back.arrows.set(step, { id: step, type: 'arrow', kind: 'reaction', x1: 0, y1: 0, x2: 1, y2: 0 } as never);
+    expect(isApplied(back, [...back.curved.values()][0])).toBe(false);
+  });
+});

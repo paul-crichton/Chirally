@@ -101,6 +101,8 @@ export class MechanismPanel {
     this.clearPending();
     const r = applyArrows(doc, arrowIds);
     this.showWarnings(r.warnings);
+    // problems are explained in the panel: make sure it is visible (Apply can come from the context menu or palette)
+    if (r.warnings.length) this.app.showTab('mechanism', true);
     const placement = r.changed ? placeStep(doc, r) : null;
     if (!placement) {
       toast(r.ok ? 'These arrows don’t change anything' : 'No intermediate generated — see the Mechanism panel', r.ok ? 'info' : 'error', 4000);
@@ -135,7 +137,7 @@ export class MechanismPanel {
       if (c) c.step = aid;
     }
     ed.commit(r.resonance ? 'Resonance structure' : 'Mechanism step');
-    ed.fitToContent();
+    ed.fitToContent(null, 60, this.app.canvasCoveredBottom());
     const summary = r.summary.length ? r.summary.join('; ') : 'no change';
     toast(`${r.resonance ? 'Resonance structure' : 'Intermediate'} generated: ${summary}`, r.warnings.length ? 'info' : 'success', 4000);
   }
@@ -177,7 +179,8 @@ export class MechanismPanel {
     ed.setGhost(ghost, { halo, label: 'Preview — not a valid intermediate' });
     // make sure the preview is in view
     const all = docBounds(ed.doc), gb = docBounds(ghost);
-    if (all && gb) ed.fitToContent({ x1: Math.min(all.minX, gb.minX), y1: Math.min(all.minY, gb.minY) - 0.8, x2: Math.max(all.maxX, gb.maxX), y2: Math.max(all.maxY, gb.maxY) });
+    if (all && gb)
+      ed.fitToContent({ x1: Math.min(all.minX, gb.minX), y1: Math.min(all.minY, gb.minY), x2: Math.max(all.maxX, gb.maxX) + 0.5, y2: Math.max(all.maxY, gb.maxY) + 1 }, 60, this.app.canvasCoveredBottom());
     clear(this.pendingBox);
     this.pendingBox.append(
       h('div', { class: 'small' }, h('b', null, 'Not added: '), 'the product breaks the rules listed below. Fix the arrows and apply again, or insert it anyway.'),
@@ -238,8 +241,13 @@ export class MechanismPanel {
 
   toggleLonePairs(): void {
     const ed = this.app.editor;
+    const pending = this.pending; // a display change: keep the preview (with lone pairs as well)
     ed.doc.style.showLonePairs = !ed.doc.style.showLonePairs;
     ed.touch();
     this.app.stylePanel?.refresh();
+    if (pending) {
+      this.pending = { ...pending, rev: ed.rev };
+      this.showPending();
+    }
   }
 }

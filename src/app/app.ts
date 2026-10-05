@@ -255,6 +255,13 @@ export class App {
     setTimeout(() => this.editor.requestRender(), 250);
   }
 
+  /** Height (px) of the canvas hidden behind the panel when it is a bottom sheet (phones); 0 otherwise. */
+  canvasCoveredBottom(): number {
+    if (window.innerWidth >= 760 || this.root.classList.contains('sidebar-hidden')) return 0;
+    const c = this.editor.canvas.getBoundingClientRect(), s = this.sidebar.getBoundingClientRect();
+    return s.top < c.bottom && s.left <= c.left + 8 ? c.bottom - s.top : 0;
+  }
+
   collapseSidebarOnMobile(): void {
     if (window.innerWidth < 760) this.root.classList.add('sidebar-hidden');
   }
@@ -967,7 +974,6 @@ export class App {
     const dark = this.isDark();
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     this.editor.theme = dark ? DARK_THEME : LIGHT_THEME;
-    this.editor.rev++;
     this.editor.requestRender();
     const tb = this.root.querySelector('.theme-btn');
     if (tb) tb.innerHTML = dark ? ICONS.sun : ICONS.moon;

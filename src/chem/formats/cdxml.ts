@@ -8,11 +8,11 @@
 import { Atom, BondStyle, Mol } from '../mol';
 import { atomicNumber } from '../elements';
 import { implicitH } from '../valence';
-import { abbreviationMol, expandAbbreviations } from '../abbreviations';
+import { abbreviationMol, expandAbbreviations, chargeSuffix, labelDisplayCharge } from '../abbreviations';
 import { ChemDoc, DocBond, ArrowObj, ArrowKind, CurvedArrowObj, TextObj, ShapeObj, ShapeKind, DocStyle, STYLE_PRESETS, Anchor } from '../../doc/types';
-import { createDoc, addAtom, addBond, newId, docToMol, fragments, adjacency, neighborsOf, docBounds } from '../../doc/document';
+import { createDoc, addAtom, addBond, newId, docToMol, fragments, adjacency, neighborsOf, docBounds, implicitHydrogenPoint } from '../../doc/document';
 import { parseXml, XmlElement, childElements, firstChild, localName, textContent, attrs, escapeText } from './xml';
-import { FormatError, guard, elementByNumber, setAbbrev, dropDefaultHCounts } from './common';
+import { FormatError, guard, elementByNumber, setAbbrev, dropDefaultHCounts, splitLabelCharge } from './common';
 
 const DEFAULT_BOND_LENGTH_PT = 14.4;
 
@@ -185,6 +185,7 @@ const PSEUDO_NODE_TYPES = new Set(['GenericNickname', 'Unspecified', 'Unknown', 
 
 function readFragment(ctx: ReadCtx, frag: XmlElement, items: Collected): void {
   const { doc, unit } = ctx;
+  const pendingNet = new Map<number, number>();
   for (const n of childElements(frag, 'n')) {
     const type = n.attrs.NodeType ?? 'Element';
     if (type === 'ExternalConnectionPoint' || type === 'MultiAttachment' || type === 'VariableAttachment') continue;
@@ -208,15 +209,24 @@ function readFragment(ctx: ReadCtx, frag: XmlElement, items: Collected): void {
     if (nh >= 0) atom.hCount = nh;
     const color = colorOf(ctx, n.attrs.color);
     if (color) atom.color = color;
+    // a label written with its charge ("OMe-", "PPh3+", "E+"): the sign is the group's net charge
+    const signed = splitLabelCharge(label);
+    let net: number | undefined;
     if (type === 'Nickname' || type === 'Fragment') {
       // right-justified labels are drawn reversed ("MeO" for OMe attached on its right)
       const reversed = tEl?.attrs.LabelJustification === 'Right' || tEl?.attrs.LabelAlignment === 'Right';
-      if (!label || !setAbbrev(atom as Atom, label, reversed)) makePseudo(atom, label || '?');
+      if (label && setAbbrev(atom as Atom, label, reversed)) {
+        // the label as written is a known group or ion
+      } else if (signed && setAbbrev(atom as Atom, signed[0], reversed)) net = signed[1];
+      else makePseudo(atom, label || '?');
     } else if (PSEUDO_NODE_TYPES.has(type)) {
-      makePseudo(atom, label || n.attrs.GenericNickname || 'R');
+      const name = n.attrs.GenericNickname || (signed ? signed[0] : label) || 'R';
+      makePseudo(atom, name);
+      if (signed && label !== name) atom.charge = signed[1];
     }
     const a = addAtom(doc, atom);
     if (n.attrs.id) ctx.nodeIds.set(n.attrs.id, a.id);
+    if (net !== undefined) pendingNet.set(a.id, net);
   }
   for (const b of childElements(frag, 'b')) {
     let a = ctx.nodeIds.get(b.attrs.B), e = ctx.nodeIds.get(b.attrs.E);
@@ -257,6 +267,14 @@ function readFragment(ctx: ReadCtx, frag: XmlElement, items: Collected): void {
     if (dp === 'Left' || dp === 'Right' || dp === 'Center') bond.dbPos = dp.toLowerCase() as 'left' | 'right' | 'center';
     const color = colorOf(ctx, b.attrs.color);
     if (color) bond.color = color;
+  }
+  // the offset behind a signed label depends on whether it is bonded (a free PPh3 is the neutral molecule)
+  if (pendingNet.size) {
+    const adj = adjacency(doc);
+    for (const [aid, q] of pendingNet) {
+      const at = doc.atoms.get(aid)!;
+      at.charge = q - labelDisplayCharge(at.abbrev!, 0, neighborsOf(doc, aid, adj).length > 0);
+    }
   }
   for (const sub of childElements(frag, 'fragment')) readFragment(ctx, sub, items);
   for (const t of childElements(frag, 't')) items.texts.push(t);
@@ -708,14 +726,17 @@ export function writeCDXML(doc: ChemDoc): string {
         const nb = neighborsOf(doc, aid, adj).map((n) => doc.atoms.get(n)!)[0];
         const inner = nicknameFragment(a, nb ? { x: nb.x, y: nb.y } : { x: a.x - 1, y: a.y }, P, id, Z, label);
         if (inner) {
-          parts.push(`<n${attrs({ ...common, NodeType: 'Nickname', NeedsClean: 'yes', color: col })}>${inner}${label(a.x, a.y, [{ text: a.abbrev, face: 96 }], col)}</n>`);
+          const text = a.abbrev + chargeSuffix(labelDisplayCharge(a.abbrev, a.charge, !!nb));
+          parts.push(`<n${attrs({ ...common, NodeType: 'Nickname', NeedsClean: 'yes', color: col })}>${inner}${label(a.x, a.y, [{ text, face: 96 }], col)}</n>`);
           continue;
         }
       }
       if (a.abbrev || a.el === 'R' || a.el === '*' || !atomicNumber(a.el)) {
-        const text = a.abbrev ?? a.alias ?? (a.el === '*' ? 'A' : 'R');
-        const generic = /^(R\d*'*|X|Ar|Ak|Hal|M|Q|A|G\d*)$/.test(text);
-        parts.push(`<n${attrs({ ...common, NodeType: generic ? 'GenericNickname' : 'Unspecified', GenericNickname: generic ? text : undefined, color: col })}>${label(a.x, a.y, [{ text, face: 0 }], col)}</n>`);
+        const name = a.abbrev ?? a.alias ?? (a.el === '*' ? 'A' : 'R');
+        const generic = /^(R\d*'*|X|Ar|Ak|Hal|M|Q|A|G\d*)$/.test(name);
+        const net = a.abbrev ? labelDisplayCharge(a.abbrev, a.charge, neighborsOf(doc, aid, adj).length > 0) : a.charge || 0;
+        const text = name + chargeSuffix(net); // E+, Nu-, OMe- keep their sign
+        parts.push(`<n${attrs({ ...common, NodeType: generic ? 'GenericNickname' : 'Unspecified', GenericNickname: generic ? name : undefined, color: col })}>${label(a.x, a.y, [{ text, face: 0 }], col)}</n>`);
         continue;
       }
       const h = implicitH(mol, mi);
@@ -941,7 +962,7 @@ function nicknameFragment(
   if (!a.abbrev || !abbreviationMol(a.abbrev)) return null;
   const tmp = new Mol();
   const n0 = tmp.addAtom({ el: 'C', x: nb.x, y: nb.y });
-  const n1 = tmp.addAtom({ el: a.el, abbrev: a.abbrev, x: a.x, y: a.y });
+  const n1 = tmp.addAtom({ el: a.el, abbrev: a.abbrev, charge: a.charge, x: a.x, y: a.y });
   tmp.addBond(n0, n1);
   const ex = expandAbbreviations(tmp);
   const ids = ex.atoms.map(() => id());
@@ -969,6 +990,7 @@ function anchorPoint(doc: ChemDoc, an: Anchor): Pt | null {
   switch (an.type) {
     case 'point': return { x: an.x, y: an.y };
     case 'atom': {
+      if (an.h) return implicitHydrogenPoint(doc, an.id); // on the atom's implicit H
       const a = doc.atoms.get(an.id);
       return a ? { x: a.x, y: a.y } : null;
     }

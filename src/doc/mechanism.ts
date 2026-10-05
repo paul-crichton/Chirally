@@ -4,7 +4,7 @@ import { ChemDoc, CurvedArrowObj, Anchor, ArrowObj } from './types';
 import { docToMol, adjacency, fragmentOf, docBounds } from './document';
 import { Mol, TetraSpec } from '../chem/mol';
 import { perceiveStereo2D, assignWedgesFromSpecs, isPotentialStereocenter } from '../chem/stereo2d';
-import { tidyProduct, arrangeRow } from './stepLayout';
+import { tidyProduct, arrangeRow, labelExtent } from './stepLayout';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit, bondValence } from '../chem/valence';
 import { kekulize } from '../chem/aromaticity';
 import { abbreviationMol, expandAbbreviations, attachmentCharge } from '../chem/abbreviations';
@@ -811,16 +811,27 @@ export function placeStep(doc: ChemDoc, r: MechanismResult): StepPlacement | nul
   if (!b || !r.product.atoms.length) return null;
   const mol = r.product.clone();
   const inBand = (y1: number, y2: number) => y2 >= b.minY - 1.5 && y1 <= b.maxY + 1.5;
+  // right edge of what is drawn in this row, including atom labels (OEt, OtBu reach well past their atom)
+  const rowAtoms = [...doc.atoms.values()].filter((a) => ids.has(a.id) || (a.x > b.minX && inBand(a.y, a.y))).map((a) => a.id);
+  const { mol: row } = docToMol(doc, rowAtoms);
   let bandMax = b.maxX;
-  for (const a of doc.atoms.values()) if (!ids.has(a.id) && a.x > b.minX && inBand(a.y, a.y)) bandMax = Math.max(bandMax, a.x);
+  row.atoms.forEach((a, i) => (bandMax = Math.max(bandMax, a.x + labelExtent(row, i)[1])));
   for (const o of doc.arrows.values()) if (Math.max(o.x1, o.x2) > b.minX && inBand(Math.min(o.y1, o.y2), Math.max(o.y1, o.y2))) bandMax = Math.max(bandMax, o.x1, o.x2);
   for (const t of doc.texts.values()) if (t.x > b.maxX && inBand(t.y, t.y)) bandMax = Math.max(bandMax, t.x + 1);
-  const startX = bandMax + 0.8;
+  const startX = bandMax + 0.6;
   const arrowGap = 3.4;
   const midY = (b.minY + b.maxY) / 2;
-  tidyProduct(mol);
-  const row = arrangeRow(mol, startX + arrowGap - 0.2, midY);
-  return { mol, arrow: { kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + arrowGap - 0.8, y2: midY }, plus: row.plus };
+  // bonds the step broke (atom pairs in the product), so opened rings get tidied
+  const at = new Map<number, number>();
+  mol.atoms.forEach((a, i) => (at.has(a.id) ? undefined : at.set(a.id, i)));
+  const broken: [number, number][] = [];
+  for (const bd of doc.bonds.values()) {
+    const i = at.get(bd.a), j = at.get(bd.b);
+    if (i !== undefined && j !== undefined && ids.has(bd.a) && mol.bondBetween(i, j) < 0) broken.push([i, j]);
+  }
+  tidyProduct(mol, broken);
+  const placed = arrangeRow(mol, startX + arrowGap - 0.2, midY);
+  return { mol, arrow: { kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + arrowGap - 0.8, y2: midY }, plus: placed.plus };
 }
 
 /** Atoms whose electron count violates the octet/duet rule in the current drawing. */

@@ -293,9 +293,10 @@ export class Editor {
   }
 
   /** Fit the drawing (or a box) into view. */
-  fitToContent(box?: Box | null, maxScale = 60): void {
+  fitToContent(box?: Box | null, maxScale = 60, hiddenBottom = 0): void {
     const b = box ?? this.getScene().bounds;
-    const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
+    // hiddenBottom: px at the bottom covered by something (the phone panel sheet)
+    const W = this.canvas.clientWidth, H = Math.max(80, this.canvas.clientHeight - hiddenBottom);
     if (!b || !W || !H) {
       this.view = { scale: 42, ox: W / 2, oy: H / 2 };
       this.requestRender();
@@ -394,11 +395,16 @@ export class Editor {
 
   // ───────────── ghost preview ─────────────
 
-  private ghost: { doc: ChemDoc; halo?: Map<number, string>; label: string; rev: number; scene?: Scene; ink?: string } | null = null;
+  private ghost: { doc: ChemDoc; halo?: Map<number, string>; label: string; rev: number; scene?: Scene; ink?: string; frame: Box | null } | null = null;
 
   /** Shows a structure translucently on top of the drawing without adding it; the next document change clears it. */
   setGhost(doc: ChemDoc | null, opts: { halo?: Map<number, string>; label?: string } = {}): void {
-    this.ghost = doc ? { doc, halo: opts.halo, label: opts.label ?? '', rev: this.rev } : null;
+    // the frame surrounds the previewed atoms only, not the arrow (which starts right next to the reactants)
+    const atoms = doc ? [...doc.atoms.values()] : [];
+    const frame = atoms.length
+      ? { x1: Math.min(...atoms.map((a) => a.x)) - 0.55, y1: Math.min(...atoms.map((a) => a.y)) - 0.55, x2: Math.max(...atoms.map((a) => a.x)) + 0.75, y2: Math.max(...atoms.map((a) => a.y)) + 0.55 }
+      : null;
+    this.ghost = doc ? { doc, halo: opts.halo, label: opts.label ?? '', rev: this.rev, frame } : null;
     this.requestRender();
   }
 
@@ -421,21 +427,27 @@ export class Editor {
     ctx.globalAlpha = 0.45;
     drawPrims(ctx, g.scene.prims, this.view);
     ctx.restore();
-    const b = g.scene.bounds;
+    const b = g.frame;
     if (!b) return;
-    const T = this.view, pad = 0.35;
-    const x = (b.x1 - pad) * T.scale + T.ox, y = (b.y1 - pad) * T.scale + T.oy;
+    const T = this.view;
+    const x = b.x1 * T.scale + T.ox, y = b.y1 * T.scale + T.oy;
+    const w = (b.x2 - b.x1) * T.scale, hgt = (b.y2 - b.y1) * T.scale;
     const red = this.theme.dark ? '#ff6b6b' : '#e03131';
     ctx.save();
     ctx.strokeStyle = red;
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
-    ctx.strokeRect(x, y, (b.x2 - b.x1 + 2 * pad) * T.scale, (b.y2 - b.y1 + 2 * pad) * T.scale);
+    ctx.strokeRect(x, y, w, hgt);
     if (g.label) {
       ctx.fillStyle = red;
       ctx.font = '600 12px system-ui, -apple-system, sans-serif';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(g.label, x, y - 4);
+      const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
+      const tw = ctx.measureText(g.label).width;
+      const lx = Math.max(4, Math.min(x, W - tw - 4));
+      // below the frame (titles usually sit above a scheme), or above it when there is no room
+      const below = y + hgt + 16 <= H - 4;
+      ctx.textBaseline = below ? 'top' : 'bottom';
+      ctx.fillText(g.label, lx, below ? y + hgt + 4 : Math.max(14, y - 4));
     }
     ctx.restore();
   }

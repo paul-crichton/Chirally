@@ -31,10 +31,9 @@ function freeDirection(occupied: number[], preferred: number): number {
 /** Moves piece `q` (which contains v) rigidly so that v sits one bond length from u, its bulk pointing away from u. */
 function attach(mol: Mol, q: number[], u: number, v: number, isPlaced: (atom: number) => boolean): void {
   const U = mol.atoms[u], V = mol.atoms[v];
-  const occupied = mol
-    .neighbors(u)
-    .filter((n) => n !== v && isPlaced(n))
-    .map((n) => Math.atan2(mol.atoms[n].y - U.y, mol.atoms[n].x - U.x));
+  // directions already taken at u: its bonds, and atoms still drawn right next to it (a ring partner whose bond broke)
+  const near = mol.atoms.map((_, n) => n).filter((n) => n !== u && n !== v && isPlaced(n) && Math.hypot(mol.atoms[n].x - U.x, mol.atoms[n].y - U.y) < 1.3);
+  const occupied = [...new Set([...mol.neighbors(u).filter((n) => n !== v && isPlaced(n)), ...near])].map((n) => Math.atan2(mol.atoms[n].y - U.y, mol.atoms[n].x - U.x));
   const dir = freeDirection(occupied, Math.atan2(V.y - U.y, V.x - U.x));
   if (q.length > 1) {
     let cx = 0, cy = 0, k = 0;
@@ -89,16 +88,22 @@ function cleanFragment(mol: Mol, frag: number[], movable: Set<number> | null): v
 }
 
 /**
- * Tidies a product in place. Bonds the step formed are recognised by id -1. Within each fragment, the pieces
- * those bonds joined are brought together around the largest one; a fragment where the step closed a ring is
- * cleaned as a whole, otherwise only the moved pieces and their joints are.
+ * Tidies a product in place. Bonds the step formed are recognised by id -1; `broken` lists atom pairs whose bond
+ * the step broke. Within each fragment, the pieces the new bonds joined are brought together around the largest
+ * one; a fragment where the step closed or opened a ring is cleaned as a whole, otherwise only the moved pieces
+ * and their joints are.
  */
-export function tidyProduct(mol: Mol): void {
+export function tidyProduct(mol: Mol, broken: [number, number][] = []): void {
   for (const frag of mol.components()) {
     const inFrag = new Set(frag);
     const isNew = (bi: number) => mol.bonds[bi].id === -1;
     const formed = mol.bonds.map((_, bi) => bi).filter((bi) => isNew(bi) && inFrag.has(mol.bonds[bi].a));
-    if (!formed.length) continue; // only bonds broken or shifted: keep the drawing
+    const opened = broken.some(([a, b]) => inFrag.has(a) && inFrag.has(b));
+    if (!formed.length) {
+      // only bonds broken or shifted: keep the drawing, unless a ring was opened (then its atoms crowd each other)
+      if (opened) cleanFragment(mol, frag, null);
+      continue;
+    }
     // the pieces the fragment falls into without the new bonds: the molecules that came together
     const piece = new Map<number, number>();
     const pieces: number[][] = [];
@@ -148,7 +153,7 @@ export function tidyProduct(mol: Mol): void {
         progress = true;
       }
     }
-    cleanFragment(mol, frag, ring ? null : moved);
+    cleanFragment(mol, frag, ring || opened ? null : moved);
   }
 }
 
@@ -156,7 +161,7 @@ export function tidyProduct(mol: Mol): void {
  * Rough horizontal extent of an atom's label (left, right) in bond lengths: nothing for a plain carbon in a
  * chain; symbol, hydrogens (which may sit on either side) and charge otherwise; the text of a label atom.
  */
-function labelExtent(mol: Mol, i: number): [number, number] {
+export function labelExtent(mol: Mol, i: number): [number, number] {
   const a = mol.atoms[i];
   const text = a.abbrev ?? a.alias;
   if (text) {

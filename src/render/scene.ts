@@ -1,7 +1,7 @@
 // Converts a ChemDoc into a list of drawing primitives (model units). Used by the canvas view,
 // SVG/PNG export and thumbnails, so every visual rule lives here.
 import { ChemDoc, DocStyle, ArrowObj, CurvedArrowObj, TextObj, ShapeObj } from '../doc/types';
-import { docToMol } from '../doc/document';
+import { docToMol, implicitHydrogenPoint } from '../doc/document';
 import { Mol } from '../chem/mol';
 import { implicitH, hasValenceError, lonePairCount } from '../chem/valence';
 import { perceiveRings, RingInfo } from '../chem/rings';
@@ -909,8 +909,9 @@ export function curvedGeometry(doc: ChemDoc, c: CurvedArrowObj, labelBoxes?: Map
   const hBox = (an: CurvedArrowObj['from']) => (an.type === 'atom' && an.h ? hydrogenBox(labelBoxes, an.id) : undefined);
   const centre = (b: Box): Pt => ({ x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 });
   const hs = hBox(c.from), he = hBox(c.to);
-  const S = hs ? centre(hs) : anchorPoint(doc, c.from);
-  const E = he ? centre(he) : anchorPoint(doc, c.to);
+  const hPoint = (an: CurvedArrowObj['from']) => (an.type === 'atom' && an.h ? implicitHydrogenPoint(doc, an.id) : null);
+  const S = hs ? centre(hs) : hPoint(c.from) ?? anchorPoint(doc, c.from);
+  const E = he ? centre(he) : hPoint(c.to) ?? anchorPoint(doc, c.to);
   if (!S || !E) return null;
   let d = sub(E, S);
   let L = len(d);
