@@ -2,7 +2,8 @@
 // with full electron bookkeeping (lone pairs, bonds, formal charges, radicals) and octet checks.
 import { ChemDoc, CurvedArrowObj, Anchor, ArrowObj } from './types';
 import { docToMol, adjacency, fragmentOf, docBounds } from './document';
-import { Mol } from '../chem/mol';
+import { Mol, TetraSpec } from '../chem/mol';
+import { perceiveStereo2D, assignWedgesFromSpecs, isPotentialStereocenter } from '../chem/stereo2d';
 import { clean2D } from '../chem/clean2d';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit, bondValence } from '../chem/valence';
 import { kekulize } from '../chem/aromaticity';
@@ -227,6 +228,8 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   }
   const H = mol.atoms.map((_, i) => implicitH(mol, i));
   const N0 = mol.atoms.map((_, i) => nonBondingElectrons(mol, i));
+  // stereocentres as drawn (wedges and coordinates)
+  const stereo0 = perceiveStereo2D(mol).tetra;
   // generic atoms (E⁺, Nu⁻, R) that arrows touch count as one-bond atoms: E⁺ has no electrons to give, Nu⁻ a lone pair
   const pseudoTouched = new Set<number>();
   for (const c of arrows)
@@ -243,7 +246,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   // bond electrons keyed by "i,j" (i<j)
   const key = (i: number, j: number) => (i < j ? `${i},${j}` : `${j},${i}`);
   const before = new Map<string, number>();
-  const bondStyle = new Map<string, { style: string; id: number }>();
+  const original = new Map<string, Mol['bonds'][number]>();
   // dative and hydrogen bonds hold no electrons of their own (the donor keeps its lone pair, as in valence
   // counting): they are copied to the product unless an arrow breaks them
   const zeroBonds = new Map<string, Mol['bonds'][number]>();
@@ -254,7 +257,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       continue;
     }
     before.set(k, Math.round(b.order * 2));
-    bondStyle.set(k, { style: b.style, id: b.id });
+    original.set(k, b);
   }
   const brokenZero = new Set<string>();
   const idx = (id: number) => index.get(id);
@@ -446,13 +449,17 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     }
     for (const [i, j, order] of pairs) {
       const kk = key(i, j);
-      const old = bondStyle.get(kk);
-      const bi = product.addBond(i, j, order, 'plain');
-      if (old) {
-        product.bonds[bi].id = old.id;
-        // keep stereo/visual styles on unchanged single bonds
-        if (order === 1 && (before.get(kk) ?? 0) === 2) product.bonds[bi].style = old.style as Mol['bonds'][number]['style'];
-      } else product.bonds[bi].id = -1;
+      const old = original.get(kk);
+      // existing bonds keep their direction (a wedge's narrow end is bond.a) and colour; unchanged bonds keep
+      // their style (wedge, hash, crossed, …) and double-bond position too
+      const bi = product.addBond(old ? old.a : i, old ? old.b : j, order, 'plain');
+      const nb = product.bonds[bi];
+      nb.id = old ? old.id : -1;
+      if (old?.color) nb.color = old.color;
+      if (old && old.order === order) {
+        nb.style = old.style;
+        if (old.dbPos) nb.dbPos = old.dbPos;
+      }
       const prev = (before.get(kk) ?? 0) / 2;
       if (prev === 0) summary.push(`formed ${atomName(mol, i)}–${atomName(mol, j)} bond`);
       else if (order !== prev) summary.push(`${atomName(mol, i)}–${atomName(mol, j)}: bond order ${prev} → ${order}`);
@@ -511,6 +518,29 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       delete a.hCount;
       if (implicitH(product, i) !== H[i]) a.hCount = H[i];
     }
+    // stereocentres: kept where no bond to the centre changed; inverted where one bond broke and another formed
+    // at an sp3 centre (backside substitution, SN2); otherwise the drawn configuration is not carried through
+    const tetra: TetraSpec[] = [];
+    const redraw: TetraSpec[] = [];
+    for (const t of stereo0) {
+      const c = t.center;
+      const now = product.neighbors(c);
+      const was = t.nbrs.filter((x) => x >= 0);
+      const lost = was.filter((x) => !now.includes(x)), gained = now.filter((x) => !was.includes(x));
+      const unchanged = was.every((x) => (before.get(key(c, x)) ?? 0) === Math.max(0, be.get(key(c, x)) ?? 0));
+      if (!lost.length && !gained.length && unchanged) tetra.push(t);
+      else if (lost.length === 1 && gained.length === 1 && now.length + implicitH(product, c) === 4) {
+        const inv: TetraSpec = { center: c, nbrs: t.nbrs.map((x) => (x === lost[0] ? gained[0] : x)) as TetraSpec['nbrs'], ccw: !t.ccw };
+        tetra.push(inv);
+        redraw.push(inv);
+      } else if (isPotentialStereocenter(product, c))
+        warnings.push({ message: `The configuration drawn at ${atomName(mol, c)} is not carried through this step`, atomIds: [mol.atoms[c].id], level: 'warning' });
+    }
+    if (redraw.length) {
+      product.tetra = redraw;
+      assignWedgesFromSpecs(product);
+    }
+    product.tetra = tetra;
     // hydrogens taken from labels go back to being implicit H of the atom that holds them now
     const drop = new Set<number>();
     for (const hi of hydrogenOf.values()) {
@@ -637,6 +667,12 @@ function withoutAtoms(m: Mol, drop: Set<number>): Mol {
     out.atoms.push(a);
   });
   for (const b of m.bonds) if (map.has(b.a) && map.has(b.b)) out.bonds.push({ ...b, a: map.get(b.a)!, b: map.get(b.b)! });
+  // stereo specs follow; a removed hydrogen neighbour becomes an implicit H (-1)
+  for (const t of m.tetra) {
+    if (!map.has(t.center)) continue;
+    const nbrs = t.nbrs.map((x) => (x < 0 ? -1 : map.has(x) ? map.get(x)! : m.atoms[x].el === 'H' ? -1 : null));
+    if (nbrs.every((x) => x !== null)) out.tetra.push({ center: map.get(t.center)!, nbrs: nbrs as TetraSpec['nbrs'], ccw: t.ccw });
+  }
   out.invalidate();
   return out;
 }

@@ -3,6 +3,8 @@ import { createDoc, addAtom, addBond, insertMol } from '../src/doc/document';
 import { parseAtomLabel } from '../src/editor/ops';
 import { buildScene, chargeText } from '../src/render/scene';
 import { expandAbbreviations } from '../src/chem/abbreviations';
+import { perceiveStereo2D } from '../src/chem/stereo2d';
+import { assignCIP } from '../src/chem/cip';
 import { applyArrows, arrowGroups, octetViolations, placeStep } from '../src/doc/mechanism';
 import { parseSmiles, writeSmiles, suppressHydrogens } from '../src/chem/smiles';
 import { ChemDoc, Anchor } from '../src/doc/types';
@@ -451,6 +453,44 @@ describe('labels, generic atoms and charge conservation', () => {
     const texts = buildScene(doc, { ink: '#000' }).prims.filter((q) => q.k === 'text').map((q) => (q as { text: string }).text);
     expect(texts).toContain(chargeText(-1));
     expect(texts).toContain(chargeText(1));
+  });
+});
+
+describe('stereochemistry through a step', () => {
+  const cipOf = (m: Mol, id: number) => {
+    const x = m.clone();
+    perceiveStereo2D(x);
+    const i = x.atoms.findIndex((a) => a.id === id);
+    return assignCIP(x).centers.get(i);
+  };
+  /** (R)-2-bromobutane with the Br on a wedge, plus hydroxide at (ox, oy). */
+  function sn2(ox: number, oy: number) {
+    const doc = createDoc();
+    const L = draw(doc, { C2: ['C', 0, 0], C1: ['C', -0.866, 0.5], C3: ['C', 0.866, 0.5], C4: ['C', 1.732, 0], Br: ['Br', 0, -1], O: ['O', ox, oy, -1] },
+      [['C2', 'C1'], ['C2', 'C3'], ['C3', 'C4']]);
+    addBond(doc, L.C2, L.Br, 1, 'wedge');
+    const r = applyArrows(doc, [arrow(doc, atomA(L.O), atomA(L.C2)), arrow(doc, { type: 'bond', id: bondId(doc, L.C2, L.Br) }, atomA(L.Br))]);
+    return { L, r };
+  }
+
+  it('backside substitution inverts the centre however the nucleophile is drawn', () => {
+    for (const [x, y] of [[0, 2.2], [0, -2.2], [-2, -1]]) {
+      const { L, r } = sn2(x, y);
+      expect(r.warnings).toEqual([]);
+      expect(cipOf(r.product, L.C2)).toBe('S');
+    }
+  });
+
+  it('keeps the colour and double-bond position of untouched bonds', () => {
+    const doc = createDoc();
+    // allyl alkoxide (the C=C is in the reacting molecule) + H⁺
+    const L = draw(doc, { A: ['C', 0, 0], B: ['C', 1, 0], C: ['C', 2, 0.5], O: ['O', 3, 0, -1], H: ['H', 4, 0, 1] }, [['B', 'C'], ['C', 'O']]);
+    const db = addBond(doc, L.A, L.B, 2);
+    db.dbPos = 'left';
+    db.color = '#e03131';
+    const r = applyArrows(doc, [arrow(doc, atomA(L.O), atomA(L.H))]);
+    const kept = r.product.bonds.find((b) => b.id === db.id)!;
+    expect(kept).toMatchObject({ order: 2, dbPos: 'left', color: '#e03131' });
   });
 });
 

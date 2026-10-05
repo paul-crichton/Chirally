@@ -1459,7 +1459,7 @@ describe('textbook mechanisms', () => {
       bromobutaneAndHydroxide(sc, 'Me');
       const c2 = sc.id('C2');
       const r = sc.step([sc.arrow(sc.A('O'), sc.A('C2')), sc.arrow(sc.B('C2', 'Br'), sc.A('Br'))]);
-      expectProduct(r, '[Br-].CCC(C)O');
+      expectProduct(r, '[Br-].CC[C@H](C)O'); // the product carries the inverted (S) centre
       expectClean(r);
       expect(cip(r.product).centers.get(c2)).toBe('S');
     });
@@ -1810,7 +1810,7 @@ describe('stereochemistry', () => {
   // Root cause: the engine has no stereo model. A wedge on a broken bond simply disappears (no Walden
   // inversion), and rebuilt bonds lose their a→b direction, so a wedge pointing at the reacting atom flips.
 
-  it.fails('SN2 on (R)-2-bromobutane with the Br on a wedge gives (S)-butan-2-ol', () => {
+  it('SN2 on (R)-2-bromobutane with the Br on a wedge gives (S)-butan-2-ol', () => {
     const sc = new Scene();
     bromobutaneAndHydroxide(sc, 'Br');
     const c2 = sc.id('C2');
@@ -1818,7 +1818,7 @@ describe('stereochemistry', () => {
     expect(cip(r.product).centers.get(c2)).toBe('S');
   });
 
-  it.fails('protonating (R)-butan-2-ol drawn with a wedge C2 → O keeps (R)', () => {
+  it('protonating (R)-butan-2-ol drawn with a wedge C2 → O keeps (R)', () => {
     const sc = new Scene();
     wedgedButanolAndProton(sc);
     const c2 = sc.id('C2');
