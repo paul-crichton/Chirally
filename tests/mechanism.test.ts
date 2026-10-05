@@ -293,3 +293,60 @@ describe('ambiguous arrows are read chemically, not by distance', () => {
   });
 });
 
+describe('rings drawn with delocalised (aromatic) bonds', () => {
+  /** Benzene drawn with the aromatic bond tool (order 1.5), atoms on a hexagon starting at (cx, cy). */
+  function aromaticBenzene(doc: ChemDoc, cx = 0, cy = 0): number[] {
+    const ids = [...Array(6)].map((_, k) => addAtom(doc, { el: 'C', x: cx + Math.cos((k * Math.PI) / 3), y: cy + Math.sin((k * Math.PI) / 3) }).id);
+    ids.forEach((id, k) => addBond(doc, id, ids[(k + 1) % 6], 1.5));
+    return ids;
+  }
+
+  it('electrophilic attack on benzene gives the arenium ion', () => {
+    const doc = createDoc();
+    const ring = aromaticBenzene(doc);
+    const br1 = addAtom(doc, { el: 'Br', x: 2.2, y: 0 }).id, br2 = addAtom(doc, { el: 'Br', x: 3.2, y: 0 }).id;
+    addBond(doc, br1, br2);
+    const r = applyArrows(doc, [
+      arrow(doc, { type: 'bond', id: bondId(doc, ring[0], ring[1]) }, atomA(br1)),
+      arrow(doc, { type: 'bond', id: bondId(doc, br1, br2) }, atomA(br2)),
+    ]);
+    expect(r.warnings).toEqual([]);
+    expect(productOf(r).split('.').sort()).toEqual([canon('BrC1C=CC=C[CH+]1'), '[Br-]'].sort());
+  });
+
+  it('a spectator ring stays delocalised', () => {
+    const doc = createDoc();
+    const ring = aromaticBenzene(doc);
+    const ch2 = addAtom(doc, { el: 'C', x: 2, y: 0 }).id, br = addAtom(doc, { el: 'Br', x: 3, y: 0 }).id;
+    addBond(doc, ring[0], ch2);
+    addBond(doc, ch2, br);
+    const o = addAtom(doc, { el: 'O', x: 2, y: -1.5, charge: -1 }).id;
+    const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(ch2)), arrow(doc, { type: 'bond', id: bondId(doc, ch2, br) }, atomA(br))]);
+    expect(r.warnings).toEqual([]);
+    expect(productOf(r).split('.').sort()).toEqual([canon('OCc1ccccc1'), '[Br-]'].sort());
+    const ringBonds = r.product.bonds.filter((b) => ring.includes(r.product.atoms[b.a].id) && ring.includes(r.product.atoms[b.b].id));
+    expect(ringBonds.map((b) => b.order)).toEqual([1.5, 1.5, 1.5, 1.5, 1.5, 1.5]);
+    expect(r.product.atoms.every((a) => !a.charge || a.el === 'Br')).toBe(true);
+  });
+
+  it('three resonance arrows around a delocalised ring are a valid resonance step', () => {
+    const doc = createDoc();
+    const ring = aromaticBenzene(doc);
+    const ids = [0, 2, 4].map((k) => arrow(doc, { type: 'bond', id: bondId(doc, ring[k], ring[k + 1]) }, { type: 'bond', id: bondId(doc, ring[k + 1], ring[(k + 2) % 6]) }));
+    const r = applyArrows(doc, ids);
+    expect(r.ok).toBe(true);
+    expect(r.resonance).toBe(true);
+    expect(productOf(r)).toBe(canon('c1ccccc1'));
+  });
+
+  it('explains when a ring cannot be given alternating double bonds', () => {
+    const doc = createDoc();
+    const ids = [...Array(5)].map((_, k) => addAtom(doc, { el: 'C', x: Math.cos((k * 2 * Math.PI) / 5), y: Math.sin((k * 2 * Math.PI) / 5) }).id);
+    ids.forEach((id, k) => addBond(doc, id, ids[(k + 1) % 5], 1.5));
+    const o = addAtom(doc, { el: 'O', x: 3, y: 0, charge: -1 }).id;
+    const h = addAtom(doc, { el: 'H', x: 2, y: 0, charge: 1 }).id;
+    const r = applyArrows(doc, [arrow(doc, atomA(o), atomA(h)), arrow(doc, atomA(ids[0]), atomA(ids[0]))]);
+    expect(r.warnings.some((w) => w.level === 'error' && /Kekulé/.test(w.message))).toBe(true);
+  });
+});
+

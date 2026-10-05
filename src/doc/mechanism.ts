@@ -5,6 +5,7 @@ import { docToMol, adjacency, fragmentOf, docBounds } from './document';
 import { Mol } from '../chem/mol';
 import { clean2D } from '../chem/clean2d';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit } from '../chem/valence';
+import { kekulize } from '../chem/aromaticity';
 import { valenceElectrons, element } from '../chem/elements';
 import { writeSmiles, suppressHydrogens } from '../chem/smiles';
 
@@ -162,6 +163,32 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   }
   const { mol, index } = docToMol(doc, involved);
   const n = mol.atoms.length;
+  // rings drawn with delocalised bonds: the bookkeeping needs a Kekulé structure, with the bonds that arrows
+  // start from as double bonds where possible; rings no arrow touches are drawn delocalised again afterwards
+  const aromatic = mol.bonds.map((b) => b.order === 1.5);
+  const aromaticSystems: { keys: string[]; atoms: number[] }[] = [];
+  if (aromatic.some(Boolean)) {
+    const fromBonds = arrows.flatMap((c) => (c.from.type === 'bond' ? [c.from.id] : [])).map((id) => mol.bonds.findIndex((b) => b.id === id));
+    if (!kekuliseForArrows(mol, aromatic, fromBonds))
+      error('This ring could not be given alternating double bonds — draw it in Kekulé form', mol.atoms.filter((_, i) => mol.adj[i].some((bi) => aromatic[bi])).map((a) => a.id));
+    // connected sets of delocalised bonds
+    const seen = new Set<number>();
+    mol.bonds.forEach((_, start) => {
+      if (!aromatic[start] || seen.has(start)) return;
+      const stack = [start], keys: string[] = [], atoms = new Set<number>();
+      seen.add(start);
+      while (stack.length) {
+        const bi = stack.pop()!;
+        const b = mol.bonds[bi];
+        keys.push(b.a < b.b ? `${b.a},${b.b}` : `${b.b},${b.a}`);
+        for (const x of [b.a, b.b]) {
+          atoms.add(x);
+          for (const nb of mol.adj[x]) if (aromatic[nb] && !seen.has(nb)) (seen.add(nb), stack.push(nb));
+        }
+      }
+      aromaticSystems.push({ keys, atoms: [...atoms] });
+    });
+  }
   const H = mol.atoms.map((_, i) => implicitH(mol, i));
   const N0 = mol.atoms.map((_, i) => nonBondingElectrons(mol, i));
   // bond electrons keyed by "i,j" (i<j)
@@ -290,6 +317,8 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   }
   if (!arrows.length) error('No electron-pushing arrows to apply');
 
+  const fishhooks = plans.some((p) => p.k === 1);
+
   // ── electron bookkeeping for one reading of the arrows ──
   const sig = (m: Map<string, number>) => [...m.entries()].filter(([, e]) => e > 0).map(([kk]) => kk).sort().join('|');
   const simulate = (picks: number[]): Outcome => {
@@ -327,7 +356,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       const [i, j] = kk.split(',').map(Number);
       let ee = e;
       if (ee % 2 !== 0) {
-        err(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the fishhook arrows`, [mol.atoms[i].id, mol.atoms[j].id]);
+        err(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the ${fishhooks ? 'fishhook arrows' : 'arrows'}`, [mol.atoms[i].id, mol.atoms[j].id]);
         ee -= 1;
         N[i] += 1; // keep the electron on one atom (radical)
       }
@@ -374,12 +403,25 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
       if (rad) a.radical = 1;
       else if (N0[i] === N[i] && mol.atoms[i].radical === 2) a.radical = 2;
       else delete a.radical;
-      // fix H counts so they don't drift
-      delete a.hCount;
-      if (implicitH(product, i) !== H[i]) a.hCount = H[i];
       const count = 2 * B + Ni;
       const lim = octetLimit(a.el);
       if (count > lim) err(`${atomName(mol, i)} would have ${count} valence electrons (limit ${lim})`, [a.id]);
+    }
+    // rings drawn delocalised that the arrows left alone are drawn delocalised again
+    for (const sys of aromaticSystems) {
+      if (sys.atoms.some((i) => N[i] !== N0[i]) || sys.keys.some((kk) => (be.get(kk) ?? 0) !== (before.get(kk) ?? 0))) continue;
+      for (const kk of sys.keys) {
+        const [i, j] = kk.split(',').map(Number);
+        const bi = product.bondBetween(i, j);
+        if (bi >= 0) product.bonds[bi].order = 1.5;
+      }
+    }
+    // fix H counts so they don't drift
+    for (let i = 0; i < n; i++) {
+      const a = product.atoms[i];
+      if (a.abbrev || !element(a.el)) continue;
+      delete a.hCount;
+      if (implicitH(product, i) !== H[i]) a.hCount = H[i];
     }
     const errors = warnings.length + fixed.filter((w) => w.level === 'error').length;
     // a failed or empty step is never a resonance structure
@@ -425,6 +467,28 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   });
   const ok = !warnings.some((w) => w.level === 'error');
   return { product: best.product, reactantAtomIds: [...involved], warnings, resonance: ok && best.resonance, ok, changed: best.changed, summary: best.summary };
+}
+
+/**
+ * Gives delocalised (order 1.5) bonds a Kekulé structure in place, trying first to make the bonds in `prefer`
+ * (bonds that arrows start from) double. Implicit hydrogen counts are fixed first so they do not change.
+ */
+function kekuliseForArrows(mol: Mol, aromatic: boolean[], prefer: number[]): boolean {
+  const atoms = mol.atoms.map(() => false);
+  mol.bonds.forEach((b, bi) => {
+    if (aromatic[bi]) atoms[b.a] = atoms[b.b] = true;
+  });
+  atoms.forEach((f, i) => {
+    if (f && mol.atoms[i].hCount === undefined) mol.atoms[i].hCount = implicitH(mol, i);
+  });
+  const attempt = (doubles: number[]): boolean => {
+    for (const bi of doubles) mol.bonds[bi].order = 2;
+    if (kekulize(mol, atoms, aromatic.map((f, bi) => f && !doubles.includes(bi)))) return true;
+    aromatic.forEach((f, bi) => f && (mol.bonds[bi].order = 1.5));
+    return false;
+  };
+  const wanted = [...new Set(prefer.filter((bi) => bi >= 0 && aromatic[bi]))];
+  return (wanted.length > 0 && attempt(wanted)) || attempt([]);
 }
 
 /** Canonical SMILES without explicit hydrogens (so drawn and implicit H compare equal), or null if it cannot be written. */

@@ -59,6 +59,7 @@ export class MechanismPanel {
             h('li', null, 'Fishhooks move one electron each: two fishhooks from one bond = homolysis (radicals).'),
             h('li', null, 'If an arrow could mean two different bonds, Chirally keeps octets intact first, then follows the chemistry (1,2-shifts, hydrogen transfer, bond polarity, Markovnikov and Michael selectivity); it tells you when only the drawing decided.'),
             h('li', null, 'Charges, radicals and lone pairs of the product are recomputed from electron counts; octet violations are flagged.'),
+            h('li', null, 'Rings drawn with delocalised (aromatic) bonds are given alternating double bonds for the step; rings the arrows don’t touch stay delocalised.'),
             h('li', null, 'If the result breaks the octet rule or electrons go missing, it is previewed in red instead of being added; you can still insert it.'),
             h('li', null, 'Apply picks the most recently drawn arrows that have not been applied yet; select arrows to apply a particular step (again).'),
           ),
