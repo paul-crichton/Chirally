@@ -53,6 +53,8 @@ export interface CurvedArrowObj {
   c1: { t: number; h: number };
   c2: { t: number; h: number };
   color?: string;
+  /** Id of the reaction/resonance arrow drawn when this arrow's mechanism step was applied. */
+  step?: number;
 }
 
 export interface TextObj {

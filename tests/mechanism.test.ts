@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createDoc, addAtom, addBond, insertMol } from '../src/doc/document';
-import { applyArrows, arrowGroups, octetViolations } from '../src/doc/mechanism';
+import { applyArrows, arrowGroups, octetViolations, placeStep } from '../src/doc/mechanism';
 import { parseSmiles, writeSmiles } from '../src/chem/smiles';
 import { ChemDoc, Anchor } from '../src/doc/types';
 import { Mol } from '../src/chem/mol';
@@ -117,4 +117,81 @@ describe('arrow pushing', () => {
     }
     expect(octetViolations(doc).map((v) => v.atomId)).toContain(c.id);
   });
+
+  it('marks impossible products as errors, not as valid steps', () => {
+    const doc = createDoc();
+    const [o] = put(doc, '[OH-]', 0);
+    const ids = put(doc, 'CC=O', 3);
+    const r = applyArrows(doc, [arrow(doc, { type: 'atom', id: o }, { type: 'atom', id: ids[1] })]);
+    expect(r.ok).toBe(false);
+    expect(r.changed).toBe(true);
+    expect(r.resonance).toBe(false);
+    expect(r.warnings.find((w) => /10 valence electrons/.test(w.message))?.level).toBe('error');
+  });
+
+  it('never calls a failed or empty step resonance', () => {
+    // arrow into empty space: nothing changes
+    const doc = createDoc();
+    const [o] = put(doc, '[OH-]', 0);
+    const r1 = applyArrows(doc, [arrow(doc, { type: 'atom', id: o }, { type: 'point', x: 5, y: 5 })]);
+    expect(r1.ok).toBe(false);
+    expect(r1.changed).toBe(false);
+    expect(r1.resonance).toBe(false);
+    // cyanide lone pair pushed into its own C≡N: bond order 4, σ framework unchanged
+    const doc2 = createDoc();
+    const [c, n] = put(doc2, '[C-]#N', 0);
+    const r2 = applyArrows(doc2, [arrow(doc2, { type: 'atom', id: c }, { type: 'bond', id: bondId(doc2, c, n) })]);
+    expect(r2.ok).toBe(false);
+    expect(r2.resonance).toBe(false);
+    // a lone pair pushed back onto its own atom changes nothing
+    const doc3 = createDoc();
+    const [o3] = put(doc3, '[OH-]', 0);
+    const r3 = applyArrows(doc3, [arrow(doc3, { type: 'atom', id: o3 }, { type: 'atom', id: o3 })]);
+    expect(r3.changed).toBe(false);
+    expect(r3.resonance).toBe(false);
+  });
+
+  it('reports arrows whose anchors no longer exist', () => {
+    const doc = createDoc();
+    const [o] = put(doc, '[OH-]', 0);
+    const [c] = put(doc, 'CBr', 3);
+    const a = arrow(doc, { type: 'atom', id: o }, { type: 'atom', id: c });
+    doc.atoms.delete(c);
+    const r = applyArrows(doc, [a]);
+    expect(r.ok).toBe(false);
+    expect(r.warnings.some((w) => /no longer exists/.test(w.message))).toBe(true);
+  });
+
+  it('knows which arrow groups were already applied', () => {
+    const doc = createDoc();
+    const [o] = put(doc, '[OH-]', 0);
+    const [c, br] = put(doc, 'CBr', 3);
+    const a1 = arrow(doc, { type: 'atom', id: o }, { type: 'atom', id: c });
+    const a2 = arrow(doc, { type: 'bond', id: bondId(doc, c, br) }, { type: 'atom', id: br });
+    expect(arrowGroups(doc)[0].applied).toBe(false);
+    const step = doc.nextId++;
+    doc.arrows.set(step, { id: step, type: 'arrow', kind: 'reaction', x1: 6, y1: 0, x2: 8, y2: 0 });
+    doc.curved.get(a1)!.step = step;
+    expect(arrowGroups(doc)[0].applied).toBe(false); // only one of the two arrows
+    doc.curved.get(a2)!.step = step;
+    expect(arrowGroups(doc)[0].applied).toBe(true);
+    doc.arrows.delete(step); // deleting the step's arrow makes it applicable again
+    expect(arrowGroups(doc)[0].applied).toBe(false);
+  });
+
+  it('places the product to the right of the reactants', () => {
+    const doc = createDoc();
+    const [o] = put(doc, '[OH-]', 0);
+    const [c, br] = put(doc, 'CBr', 3);
+    const r = applyArrows(doc, [
+      arrow(doc, { type: 'atom', id: o }, { type: 'atom', id: c }),
+      arrow(doc, { type: 'bond', id: bondId(doc, c, br) }, { type: 'atom', id: br }),
+    ]);
+    const p = placeStep(doc, r)!;
+    expect(p.arrow.kind).toBe('reaction');
+    expect(p.arrow.x1).toBeGreaterThan(4);
+    expect(Math.min(...p.mol.atoms.map((a) => a.x))).toBeGreaterThan(p.arrow.x2);
+    expect(r.product.atoms.map((a) => a.x)).toEqual([0, 3, 4]); // the engine's product itself is not moved
+  });
 });
+

@@ -1,14 +1,17 @@
 // Arrow-pushing engine: applies curved (electron-flow) arrows to produce the next intermediate,
 // with full electron bookkeeping (lone pairs, bonds, formal charges, radicals) and octet checks.
-import { ChemDoc, CurvedArrowObj, Anchor } from './types';
-import { docToMol, adjacency, fragmentOf } from './document';
+import { ChemDoc, CurvedArrowObj, Anchor, ArrowObj } from './types';
+import { docToMol, adjacency, fragmentOf, docBounds } from './document';
 import { Mol } from '../chem/mol';
+import { clean2D } from '../chem/clean2d';
 import { implicitH, nonBondingElectrons, bondOrderSum, octetLimit } from '../chem/valence';
 import { valenceElectrons, element } from '../chem/elements';
 
 export interface MechanismWarning {
   message: string;
   atomIds?: number[];
+  /** 'error': the product is not a valid structure (it is previewed, not inserted); 'warning': inserted, but check it. */
+  level: 'error' | 'warning';
 }
 
 export interface MechanismResult {
@@ -17,8 +20,12 @@ export interface MechanismResult {
   /** Document atom ids of the reactant fragments used. */
   reactantAtomIds: number[];
   warnings: MechanismWarning[];
-  /** true when σ-connectivity is unchanged (resonance structures → ↔ arrow). */
+  /** true for a valid step that only moves π / lone-pair electrons (σ-connectivity unchanged → ↔ arrow). */
   resonance: boolean;
+  /** No error-level warnings: the product is a valid next intermediate. */
+  ok: boolean;
+  /** The arrows changed at least one bond or electron count. */
+  changed: boolean;
   /** Human-readable summary of what happened, e.g. "formed C–O, broke C–Br". */
   summary: string[];
 }
@@ -29,7 +36,20 @@ function atomName(mol: Mol, i: number): string {
 }
 
 /** Groups curved arrows into independent "steps": arrows sharing fragments belong together. */
-export function arrowGroups(doc: ChemDoc): { arrows: number[]; atoms: number[]; maxX: number }[] {
+export interface ArrowGroup {
+  arrows: number[];
+  atoms: number[];
+  maxX: number;
+  /** Every arrow in the group already produced a step whose reaction/resonance arrow is still in the drawing. */
+  applied: boolean;
+}
+
+/** True when the curved arrow was applied and the arrow drawn for that step still exists. */
+export function isApplied(doc: ChemDoc, c: CurvedArrowObj): boolean {
+  return c.step !== undefined && doc.arrows.has(c.step);
+}
+
+export function arrowGroups(doc: ChemDoc): ArrowGroup[] {
   const adj = adjacency(doc);
   const fragOf = new Map<number, number>();
   const frags: number[][] = [];
@@ -76,8 +96,8 @@ export function arrowGroups(doc: ChemDoc): { arrows: number[]; atoms: number[]; 
   }
   return [...groups.values()].map((g) => {
     let maxX = -Infinity;
-    for (const a of g.atoms) maxX = Math.max(maxX, doc.atoms.get(a)!.x);
-    return { arrows: g.arrows, atoms: [...g.atoms], maxX };
+    for (const a of g.atoms) maxX = Math.max(maxX, doc.atoms.get(a)?.x ?? -Infinity);
+    return { arrows: g.arrows, atoms: [...g.atoms], maxX, applied: g.arrows.every((id) => isApplied(doc, doc.curved.get(id)!)) };
   });
 }
 
@@ -87,8 +107,11 @@ export function arrowGroups(doc: ChemDoc): { arrows: number[]; atoms: number[]; 
  */
 export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
   const warnings: MechanismWarning[] = [];
+  const error = (message: string, atomIds?: number[]) => warnings.push({ message, atomIds, level: 'error' });
+  const warn = (message: string, atomIds?: number[]) => warnings.push({ message, atomIds, level: 'warning' });
   const summary: string[] = [];
   const arrows = arrowIds.map((id) => doc.curved.get(id)).filter(Boolean) as CurvedArrowObj[];
+  const missing = () => error('An arrow is attached to an atom or bond that no longer exists');
   // involved fragments
   const adj = adjacency(doc);
   const involved = new Set<number>();
@@ -134,35 +157,50 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
 
   for (const c of arrows) {
     const k = c.electrons;
+    const addBondE = (i: number, j: number) => {
+      const kk = key(i, j);
+      be.set(kk, (be.get(kk) ?? 0) + k);
+    };
     // ── source ──
     let srcAtom = -1;
     let srcPair: [number, number] | null = null;
     if (c.from.type === 'atom') {
       const i = idx(c.from.id);
-      if (i === undefined) continue;
+      if (i === undefined) {
+        missing();
+        continue;
+      }
       srcAtom = i;
-      if (N[i] < k) warnings.push({ message: `${atomName(mol, i)} has no ${k === 2 ? 'lone pair' : 'non-bonding electron'} to donate`, atomIds: [mol.atoms[i].id] });
+      if (N[i] < k) error(`${atomName(mol, i)} has no ${k === 2 ? 'lone pair' : 'non-bonding electron'} to donate`, [mol.atoms[i].id]);
       N[i] -= k;
     } else if (c.from.type === 'bond') {
       const b = doc.bonds.get(c.from.id);
       const i = b ? idx(b.a) : undefined, j = b ? idx(b.b) : undefined;
-      if (i === undefined || j === undefined) continue;
+      if (i === undefined || j === undefined) {
+        missing();
+        continue;
+      }
       srcPair = [i, j];
       const kk = key(i, j);
       be.set(kk, (be.get(kk) ?? 0) - k);
-      if ((be.get(kk) ?? 0) < 0) warnings.push({ message: 'An arrow starts from a bond with no electrons left', atomIds: [mol.atoms[i].id, mol.atoms[j].id] });
+      if ((be.get(kk) ?? 0) < 0) error('An arrow starts from a bond with no electrons left', [mol.atoms[i].id, mol.atoms[j].id]);
     } else {
-      warnings.push({ message: 'An electron-pushing arrow must start at an atom (lone pair) or a bond' });
+      error('An electron-pushing arrow must start at an atom (lone pair) or a bond');
       continue;
     }
     // ── target ──
-    const addBondE = (i: number, j: number) => {
-      const kk = key(i, j);
-      be.set(kk, (be.get(kk) ?? 0) + k);
+    // electrons go back to where they came from when the target is unusable
+    const giveBack = () => {
+      if (srcAtom >= 0) N[srcAtom] += k;
+      else if (srcPair) addBondE(srcPair[0], srcPair[1]);
     };
     if (c.to.type === 'atom') {
       const t = idx(c.to.id);
-      if (t === undefined) continue;
+      if (t === undefined) {
+        missing();
+        giveBack();
+        continue;
+      }
       if (srcAtom >= 0) {
         if (t === srcAtom) {
           N[t] += k;
@@ -176,23 +214,33 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     } else if (c.to.type === 'bond') {
       const b = doc.bonds.get(c.to.id);
       const i = b ? idx(b.a) : undefined, j = b ? idx(b.b) : undefined;
-      if (i === undefined || j === undefined) continue;
+      if (i === undefined || j === undefined) {
+        missing();
+        giveBack();
+        continue;
+      }
       if (srcAtom >= 0 && srcAtom !== i && srcAtom !== j) {
         // lone pair pushed toward a remote bond: interpret as forming a bond to the nearer atom
         addBondE(nearer([i, j], srcAtom), srcAtom);
-        warnings.push({ message: 'Arrow from a lone pair to a remote bond interpreted as bond formation to the nearer atom' });
+        warn('Arrow from a lone pair to a remote bond interpreted as bond formation to the nearer atom');
       } else addBondE(i, j);
     } else if (c.to.type === 'between') {
       const i = idx(c.to.a), j = idx(c.to.b);
-      if (i === undefined || j === undefined) continue;
+      if (i === undefined || j === undefined) {
+        missing();
+        giveBack();
+        continue;
+      }
       addBondE(i, j);
     } else {
-      warnings.push({ message: 'An arrow ends in empty space — point it at an atom, a bond or between two atoms' });
+      error('An arrow ends in empty space — point it at an atom, a bond or between two atoms');
       // electrons are lost → give them back to the source to keep counts consistent
-      if (srcAtom >= 0) N[srcAtom] += k;
-      else if (srcPair) addBondE(srcPair[0], srcPair[1]);
+      giveBack();
     }
   }
+
+  const changed =
+    N.some((v, i) => v !== N0[i]) || [...new Set([...before.keys(), ...be.keys()])].some((kk) => Math.max(0, be.get(kk) ?? 0) !== (before.get(kk) ?? 0));
 
   // ── build product ──
   const product = new Mol();
@@ -202,14 +250,14 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     const [i, j] = kk.split(',').map(Number);
     let ee = e;
     if (ee % 2 !== 0) {
-      warnings.push({ message: `Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the fishhook arrows`, atomIds: [mol.atoms[i].id, mol.atoms[j].id] });
+      error(`Odd number of electrons left between ${atomName(mol, i)} and ${atomName(mol, j)} — check the fishhook arrows`, [mol.atoms[i].id, mol.atoms[j].id]);
       ee -= 1;
       N[i] += 1; // keep the electron on one atom (radical)
     }
     if (ee <= 0) continue;
     let order = ee / 2;
     if (order > 3) {
-      warnings.push({ message: `Bond order ${order} between ${atomName(mol, i)} and ${atomName(mol, j)}`, atomIds: [mol.atoms[i].id, mol.atoms[j].id] });
+      error(`Bond order ${order} between ${atomName(mol, i)} and ${atomName(mol, j)}`, [mol.atoms[i].id, mol.atoms[j].id]);
       order = 3;
     }
     pairs.push([i, j, order]);
@@ -244,7 +292,7 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     const V = valenceElectrons(a.el);
     const B = bondOrderSum(product, i) + H[i];
     const Ni = Math.max(0, N[i]);
-    if (N[i] < 0) warnings.push({ message: `${atomName(mol, i)} gave away more electrons than it had`, atomIds: [a.id] });
+    if (N[i] < 0) error(`${atomName(mol, i)} gave away more electrons than it had`, [a.id]);
     a.charge = Math.round(V - Ni - B);
     const rad = Ni % 2;
     // keep an existing diradical/carbene designation when the electron count is unchanged
@@ -257,14 +305,54 @@ export function applyArrows(doc: ChemDoc, arrowIds: number[]): MechanismResult {
     // octet check
     const count = 2 * B + Ni;
     const lim = octetLimit(a.el);
-    if (count > lim) warnings.push({ message: `${atomName(mol, i)} would have ${count} valence electrons (limit ${lim})`, atomIds: [a.id] });
+    if (count > lim) error(`${atomName(mol, i)} would have ${count} valence electrons (limit ${lim})`, [a.id]);
   }
 
   // resonance: σ framework unchanged?
   const sig = (m: Map<string, number>) => [...m.entries()].filter(([, e]) => e > 0).map(([kk]) => kk).sort().join('|');
-  const resonance = sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
-  if (!arrows.length) warnings.push({ message: 'No electron-pushing arrows to apply' });
-  return { product, reactantAtomIds: [...involved], warnings, resonance, summary };
+  if (!arrows.length) error('No electron-pushing arrows to apply');
+  const ok = !warnings.some((w) => w.level === 'error');
+  // a failed or empty step is never a resonance structure
+  const resonance = ok && changed && sig(before) === sig(new Map(pairs.map(([i, j, o]) => [key(i, j), o * 2])));
+  return { product, reactantAtomIds: [...involved], warnings, resonance, ok, changed, summary };
+}
+
+export interface StepPlacement {
+  /** The product, moved to where it goes in the drawing (atoms keep the ids of the atoms they came from). */
+  mol: Mol;
+  /** The reaction (→) or resonance (↔) arrow drawn between reactants and product. */
+  arrow: Omit<ArrowObj, 'id' | 'type'>;
+}
+
+/** Where a step's product and arrow go: to the right of the reactants and of anything else drawn in that row. */
+export function placeStep(doc: ChemDoc, r: MechanismResult): StepPlacement | null {
+  const ids = new Set(r.reactantAtomIds);
+  const b = docBounds(doc, ids);
+  if (!b || !r.product.atoms.length) return null;
+  const mol = r.product.clone();
+  const inBand = (y1: number, y2: number) => y2 >= b.minY - 1.5 && y1 <= b.maxY + 1.5;
+  let bandMax = b.maxX;
+  for (const a of doc.atoms.values()) if (!ids.has(a.id) && a.x > b.minX && inBand(a.y, a.y)) bandMax = Math.max(bandMax, a.x);
+  for (const o of doc.arrows.values()) if (Math.max(o.x1, o.x2) > b.minX && inBand(Math.min(o.y1, o.y2), Math.max(o.y1, o.y2))) bandMax = Math.max(bandMax, o.x1, o.x2);
+  for (const t of doc.texts.values()) if (t.x > b.maxX && inBand(t.y, t.y)) bandMax = Math.max(bandMax, t.x + 1);
+  const startX = bandMax + 0.8;
+  const arrowGap = 3.4;
+  // tidy bonds that were created between separate fragments
+  const formedLong = mol.bonds.some((bd) => {
+    const A = mol.atoms[bd.a], B = mol.atoms[bd.b];
+    return Math.hypot(A.x - B.x, A.y - B.y) > 1.6;
+  });
+  if (formedLong) {
+    try {
+      clean2D(mol);
+    } catch {
+      /* keep raw geometry */
+    }
+  }
+  const pb = mol.bbox();
+  const midY = (b.minY + b.maxY) / 2;
+  mol.translate(startX + arrowGap - pb.minX + 0.2, midY - (pb.minY + pb.maxY) / 2);
+  return { mol, arrow: { kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + arrowGap - 0.8, y2: midY } };
 }
 
 /** Atoms whose electron count violates the octet/duet rule in the current drawing. */

@@ -843,7 +843,7 @@ export class App {
       if (hit.kind === 'curved') items.push(
         { label: 'Flip curvature', run: () => ed.mutate('Flip arrow', (d) => { const c = d.curved.get(id)!; c.c1.h = -c.c1.h; c.c2.h = -c.c2.h; }) },
         { label: 'Toggle pair / single electron', run: () => ed.mutate('Arrow electrons', (d) => { const c = d.curved.get(id)!; c.electrons = c.electrons === 2 ? 1 : 2; }) },
-        { label: 'Apply this arrow group', run: () => this.mechanismPanel.applyStep() },
+        { label: 'Apply this arrow group', run: () => this.mechanismPanel.applyGroupOf(id) },
       );
       items.push({ separator: true, label: '' }, { label: 'Delete', keys: 'Del', run: () => ed.mutate('Delete', (d) => deleteSelection(d, { atoms: new Set(), bonds: new Set(), objects: new Set([id]) })) });
     } else {

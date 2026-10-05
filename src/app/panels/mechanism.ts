@@ -2,19 +2,34 @@
 import type { App } from '../app';
 import { h, clear, svgEl, toast } from '../dom';
 import { ICONS } from '../icons';
-import { applyArrows, arrowGroups, octetViolations, MechanismWarning } from '../../doc/mechanism';
-import { insertMol, docBounds } from '../../doc/document';
-import { clean2D } from '../../chem/clean2d';
+import { applyArrows, arrowGroups, isApplied, octetViolations, placeStep, MechanismResult, MechanismWarning, StepPlacement } from '../../doc/mechanism';
+import { createDoc, insertMol, docBounds } from '../../doc/document';
+import { ChemDoc } from '../../doc/types';
+
+/** A step whose product is not a valid structure: shown as a ghost until the user inserts or discards it. */
+interface PendingStep {
+  result: MechanismResult;
+  placement: StepPlacement;
+  arrowIds: number[];
+  /** Document revision the preview was computed for; any edit invalidates it. */
+  rev: number;
+}
 
 export class MechanismPanel {
   el: HTMLElement;
   private status: HTMLElement;
   private warnings: HTMLElement;
+  private pendingBox: HTMLElement;
+  private pending: PendingStep | null = null;
 
   constructor(private app: App) {
     this.status = h('div', { class: 'mech-status' });
     this.warnings = h('div', { class: 'mech-warnings' });
+    this.pendingBox = h('div', { class: 'mech-pending', hidden: true });
     const ed = app.editor;
+    ed.on('change', () => {
+      if (this.pending && this.pending.rev !== ed.rev) this.clearPending();
+    });
     this.el = h(
       'section',
       { class: 'panel', 'aria-label': 'Mechanism' },
@@ -28,6 +43,7 @@ export class MechanismPanel {
         ),
         h('button', { class: 'btn btn-primary btn-block', onclick: () => this.applyStep() }, svgEl(ICONS.mech), 'Apply arrows → next intermediate'),
         this.status,
+        this.pendingBox,
         this.warnings,
         h('div', { class: 'row-actions wrap' },
           h('button', { class: 'btn btn-small', onclick: () => this.checkElectrons() }, svgEl(ICONS.check), 'Check electron counts'),
@@ -42,6 +58,8 @@ export class MechanismPanel {
             h('li', null, 'Bond → another bond / atom: shifts the π/σ electrons (resonance, additions).'),
             h('li', null, 'Fishhooks move one electron each: two fishhooks from one bond = homolysis (radicals).'),
             h('li', null, 'Charges, radicals and lone pairs of the product are recomputed from electron counts; octet violations are flagged.'),
+            h('li', null, 'If the result breaks the octet rule or electrons go missing, it is previewed in red instead of being added; you can still insert it.'),
+            h('li', null, 'Apply picks the most recently drawn arrows that have not been applied yet; select arrows to apply a particular step (again).'),
           ),
         ),
       ),
@@ -51,78 +69,136 @@ export class MechanismPanel {
   update(): void {
     const groups = arrowGroups(this.app.editor.doc);
     const n = groups.reduce((s, g) => s + g.arrows.length, 0);
-    this.status.textContent = n ? `${n} curved arrow${n > 1 ? 's' : ''} in ${groups.length} step${groups.length > 1 ? 's' : ''}` : 'No curved arrows yet.';
+    const done = groups.filter((g) => g.applied).length;
+    this.status.textContent = n
+      ? `${n} curved arrow${n > 1 ? 's' : ''} in ${groups.length} step${groups.length > 1 ? 's' : ''}${done ? ` · ${done === groups.length ? 'all' : done} applied` : ''}`
+      : 'No curved arrows yet.';
   }
 
-  /** Applies the selected curved arrows, or the right-most group of arrows. */
-  applyStep(): void {
+  /**
+   * Applies `ids`, or else the selected curved arrows, or else the most recently drawn group of arrows that
+   * has not been applied yet. Valid steps are added to the drawing; invalid ones are only previewed.
+   */
+  applyStep(ids?: number[]): void {
     const ed = this.app.editor;
     const doc = ed.doc;
-    let arrowIds = [...ed.sel.objects].filter((id) => doc.curved.has(id));
-    if (!arrowIds.length) {
+    let arrowIds = (ids ?? [...ed.sel.objects]).filter((id) => doc.curved.has(id));
+    if (arrowIds.length) {
+      if (arrowIds.some((id) => isApplied(doc, doc.curved.get(id)!)) && !confirm('These arrows were already applied. Apply them again?')) return;
+    } else {
       const groups = arrowGroups(doc);
       if (!groups.length) return toast('Draw electron-pushing arrows first (curved-arrow tool, Shift+A)', 'error');
-      groups.sort((a, b) => b.maxX - a.maxX);
-      arrowIds = groups[0].arrows;
+      const open = groups.filter((g) => !g.applied);
+      if (!open.length) return toast('All curved arrows have been applied. Select arrows to apply them again.', 'info', 4000);
+      open.sort((a, b) => Math.max(...b.arrows) - Math.max(...a.arrows) || b.maxX - a.maxX);
+      arrowIds = open[0].arrows;
     }
+    this.clearPending();
     const r = applyArrows(doc, arrowIds);
     this.showWarnings(r.warnings);
-    if (!r.product.atoms.length) return;
-    // place the product to the right of everything involved
-    const ids = new Set(r.reactantAtomIds);
-    const b = docBounds(doc, ids);
-    const all = docBounds(doc);
-    if (!b || !all) return;
-    const width = b.maxX - b.minX;
-    const arrowGap = 3.4;
-    // start right of the reactants, but after anything else drawn in the same horizontal band
-    let bandMax = b.maxX;
-    const inBand = (y1: number, y2: number) => y2 >= b.minY - 1.5 && y1 <= b.maxY + 1.5;
-    for (const a of doc.atoms.values()) if (!ids.has(a.id) && a.x > b.minX && inBand(a.y, a.y)) bandMax = Math.max(bandMax, a.x);
-    for (const o of doc.arrows.values()) if (Math.max(o.x1, o.x2) > b.minX && inBand(Math.min(o.y1, o.y2), Math.max(o.y1, o.y2))) bandMax = Math.max(bandMax, o.x1, o.x2);
-    for (const t of doc.texts.values()) if (t.x > b.maxX && inBand(t.y, t.y)) bandMax = Math.max(bandMax, t.x + 1);
-    const startX = bandMax + 0.8;
-    void all;
-    // tidy bonds that were created between separate fragments
-    const formedLong = r.product.bonds.some((bd) => {
-      const A = r.product.atoms[bd.a], B = r.product.atoms[bd.b];
-      return Math.hypot(A.x - B.x, A.y - B.y) > 1.6;
-    });
-    if (formedLong) {
-      try {
-        clean2D(r.product);
-      } catch {
-        /* keep raw geometry */
-      }
+    const placement = r.changed ? placeStep(doc, r) : null;
+    if (!placement) {
+      toast(r.ok ? 'These arrows don’t change anything' : 'No intermediate generated — see the Mechanism panel', r.ok ? 'info' : 'error', 4000);
+      return;
     }
-    const pb = r.product.bbox();
-    const midY = (b.minY + b.maxY) / 2;
+    if (r.ok) {
+      this.insertStep(r, placement, arrowIds);
+      return;
+    }
+    this.pending = { result: r, placement, arrowIds, rev: ed.rev };
+    this.showPending();
+    toast('Not a valid intermediate — previewed in red, not added', 'error', 4000);
+  }
+
+  /** Applies the arrow group that contains the given curved arrow (context menu). */
+  applyGroupOf(curvedId: number): void {
+    const g = arrowGroups(this.app.editor.doc).find((x) => x.arrows.includes(curvedId));
+    if (g) this.applyStep(g.arrows);
+  }
+
+  private insertStep(r: MechanismResult, placement: StepPlacement, arrowIds: number[]): void {
+    const ed = this.app.editor;
+    const doc = ed.doc;
     ed.begin();
     const aid = doc.nextId++;
-    doc.arrows.set(aid, { id: aid, type: 'arrow', kind: r.resonance ? 'resonance' : 'reaction', x1: startX, y1: midY, x2: startX + arrowGap - 0.8, y2: midY });
-    const dx = startX + arrowGap - pb.minX + 0.2;
-    const dy = midY - (pb.minY + pb.maxY) / 2;
-    // product atoms are new copies
-    for (const a of r.product.atoms) delete (a as { lonePairs?: boolean }).lonePairs;
-    const { atomIds } = insertMol(doc, r.product, dx, dy);
-    // keep lone-pair display for atoms that showed them in the reactant
-    r.product.atoms.forEach((a, i) => {
-      const src = doc.atoms.get(a.id);
-      if (src?.lonePairs) doc.atoms.get(atomIds[i])!.lonePairs = true;
-    });
+    doc.arrows.set(aid, { id: aid, type: 'arrow', ...placement.arrow });
+    this.addProduct(doc, placement);
+    // remember the step so Apply moves on to the next one
+    for (const id of arrowIds) {
+      const c = doc.curved.get(id);
+      if (c) c.step = aid;
+    }
     ed.commit(r.resonance ? 'Resonance structure' : 'Mechanism step');
-    void width;
     ed.fitToContent();
     const summary = r.summary.length ? r.summary.join('; ') : 'no change';
     toast(`${r.resonance ? 'Resonance structure' : 'Intermediate'} generated: ${summary}`, r.warnings.length ? 'info' : 'success', 4000);
+  }
+
+  /** Adds the placed product to `target`, keeping lone-pair display from the reactant atoms. Returns the new atom ids. */
+  private addProduct(target: ChemDoc, placement: StepPlacement): number[] {
+    const src = this.app.editor.doc;
+    const mol = placement.mol.clone();
+    for (const a of mol.atoms) delete (a as { lonePairs?: boolean }).lonePairs;
+    const { atomIds } = insertMol(target, mol);
+    placement.mol.atoms.forEach((a, i) => {
+      if (src.atoms.get(a.id)?.lonePairs) target.atoms.get(atomIds[i])!.lonePairs = true;
+    });
+    return atomIds;
+  }
+
+  private showPending(): void {
+    const p = this.pending!;
+    const ed = this.app.editor;
+    const ghost = createDoc({ ...ed.doc.style });
+    const aid = ghost.nextId++;
+    ghost.arrows.set(aid, { id: aid, type: 'arrow', ...p.placement.arrow });
+    const atomIds = this.addProduct(ghost, p.placement);
+    const bad = new Set(p.result.warnings.filter((w) => w.level === 'error').flatMap((w) => w.atomIds ?? []));
+    const halo = new Map<number, string>();
+    p.placement.mol.atoms.forEach((a, i) => {
+      if (bad.has(a.id)) halo.set(atomIds[i], 'rgba(224,49,49,0.35)');
+    });
+    ed.setGhost(ghost, { halo, label: 'Preview — not a valid intermediate' });
+    // make sure the preview is in view
+    const all = docBounds(ed.doc), gb = docBounds(ghost);
+    if (all && gb) ed.fitToContent({ x1: Math.min(all.minX, gb.minX), y1: Math.min(all.minY, gb.minY) - 0.8, x2: Math.max(all.maxX, gb.maxX), y2: Math.max(all.maxY, gb.maxY) });
+    clear(this.pendingBox);
+    this.pendingBox.append(
+      h('div', { class: 'small' }, h('b', null, 'Not added: '), 'the product breaks the rules listed below. Fix the arrows and apply again, or insert it anyway.'),
+      h('div', { class: 'row-actions' },
+        h('button', { class: 'btn btn-small', onclick: () => this.insertPending() }, 'Insert anyway'),
+        h('button', { class: 'btn btn-small', onclick: () => this.clearPending() }, 'Discard'),
+      ),
+    );
+    this.pendingBox.hidden = false;
+  }
+
+  private insertPending(): void {
+    const p = this.pending;
+    if (!p || p.rev !== this.app.editor.rev) {
+      this.clearPending();
+      toast('The drawing changed — apply the arrows again', 'info');
+      return;
+    }
+    this.clearPending();
+    this.insertStep(p.result, p.placement, p.arrowIds);
+  }
+
+  private clearPending(): void {
+    if (!this.pending && this.pendingBox.hidden) return;
+    this.pending = null;
+    this.app.editor.setGhost(null);
+    clear(this.pendingBox);
+    this.pendingBox.hidden = true;
   }
 
   private showWarnings(ws: MechanismWarning[]): void {
     clear(this.warnings);
     const halo = new Map<number, string>();
     for (const w of ws) {
-      this.warnings.appendChild(h('div', { class: 'warn small' }, '⚠ ' + w.message));
-      for (const id of w.atomIds ?? []) halo.set(id, 'rgba(224,49,49,0.25)');
+      const isError = w.level === 'error';
+      this.warnings.appendChild(h('div', { class: `${isError ? 'err' : 'warn'} small` }, (isError ? '✖ ' : '⚠ ') + w.message));
+      for (const id of w.atomIds ?? []) halo.set(id, isError ? 'rgba(224,49,49,0.25)' : 'rgba(232,89,12,0.22)');
     }
     this.app.setWarningHalos(halo.size ? halo : null);
   }

@@ -937,6 +937,20 @@ details.sub[open] > summary::before {
   flex-direction: column;
   gap: 4px;
 }
+.mech-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--danger);
+  border-radius: 8px;
+}
+.mech-pending[hidden] {
+  display: none;
+}
+.err {
+  color: var(--danger);
+}
 
 /* library */
 .library {

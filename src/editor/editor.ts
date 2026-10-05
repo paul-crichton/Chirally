@@ -386,9 +386,58 @@ export class Editor {
     this.drawSelectionUnder(ctx, scene);
     this.drawHover(ctx, scene);
     drawPrims(ctx, scene.prims, this.view);
+    this.drawGhost(ctx);
     this.tool.overlay?.(ctx);
     this.drawSelectionBox(ctx);
     if (this.emptyHint && !this.doc.atoms.size && !this.doc.arrows.size && !this.doc.texts.size && !this.doc.shapes.size) this.drawEmptyHint(ctx, W, H);
+  }
+
+  // ───────────── ghost preview ─────────────
+
+  private ghost: { doc: ChemDoc; halo?: Map<number, string>; label: string; rev: number; scene?: Scene; ink?: string } | null = null;
+
+  /** Shows a structure translucently on top of the drawing without adding it; the next document change clears it. */
+  setGhost(doc: ChemDoc | null, opts: { halo?: Map<number, string>; label?: string } = {}): void {
+    this.ghost = doc ? { doc, halo: opts.halo, label: opts.label ?? '', rev: this.rev } : null;
+    this.requestRender();
+  }
+
+  get hasGhost(): boolean {
+    return !!this.ghost && this.ghost.rev === this.rev;
+  }
+
+  private drawGhost(ctx: CanvasRenderingContext2D): void {
+    const g = this.ghost;
+    if (!g) return;
+    if (g.rev !== this.rev) {
+      this.ghost = null;
+      return;
+    }
+    if (!g.scene || g.ink !== this.theme.ink) {
+      g.scene = buildScene(g.doc, { ink: this.theme.ink, dark: this.theme.dark, atomHalo: g.halo });
+      g.ink = this.theme.ink;
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    drawPrims(ctx, g.scene.prims, this.view);
+    ctx.restore();
+    const b = g.scene.bounds;
+    if (!b) return;
+    const T = this.view, pad = 0.35;
+    const x = (b.x1 - pad) * T.scale + T.ox, y = (b.y1 - pad) * T.scale + T.oy;
+    const red = this.theme.dark ? '#ff6b6b' : '#e03131';
+    ctx.save();
+    ctx.strokeStyle = red;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x, y, (b.x2 - b.x1 + 2 * pad) * T.scale, (b.y2 - b.y1 + 2 * pad) * T.scale);
+    if (g.label) {
+      ctx.fillStyle = red;
+      ctx.font = '600 12px system-ui, -apple-system, sans-serif';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(g.label, x, y - 4);
+    }
+    ctx.restore();
   }
 
   /** Lines shown in the middle of an empty canvas (set by the app). */
@@ -1087,7 +1136,9 @@ export class Editor {
         if (an.type === 'between') return { type: 'between', a: idMap.get(an.a)!, b: idMap.get(an.b)! };
         return { type: 'point', x: an.x + dx, y: an.y + dy };
       };
-      this.doc.curved.set(id, { ...c, id, from: remap(c.from), to: remap(c.to), c1: { ...c.c1 }, c2: { ...c.c2 } });
+      const { step: _step, ...rest } = c;
+      void _step;
+      this.doc.curved.set(id, { ...rest, id, from: remap(c.from), to: remap(c.to), c1: { ...c.c1 }, c2: { ...c.c2 } });
       sel.objects.add(id);
     }
     this.commit('Paste');
